@@ -34,7 +34,7 @@ const RIDER_COL = "rider_car";     // rider_id, user_id, image_car, plate_number
 const COUNTERS  = "_counters";     // seq storage
 
 /* --------------------------------- Healthcheck -------------------------------- */
-app.get("/api", (_, res) => res.send("API on Render 🚀"));
+app.get("/", (_, res) => res.send("API on Render 🚀"));
 
 /* ---------------------- Auto-increment Counter (transaction) ---------------------- */
 async function nextId(sequence) {
@@ -142,7 +142,7 @@ async function createRiderCar({ user_id, image_car, plate_number, car_type }) {
 
 /* ---------------------------------- Routes ---------------------------------- */
 /** สมัครผู้ใช้ทั่วไป (เฉพาะ user) — ไม่สร้าง user_address ในเส้นนี้ */
-app.post("/api/register/user", async (req, res) => {
+app.post("/register/user", async (req, res) => {
   try {
     const { name, phone, password, picture } = req.body ?? {};
     const user = await createUser({ name, phone, password, picture, role: 0 });
@@ -153,7 +153,7 @@ app.post("/api/register/user", async (req, res) => {
 });
 
 /** สมัครไรเดอร์ (user role=1 + rider_car) — ไม่มี address */
-app.post("/api/register/rider", async (req, res) => {
+app.post("/register/rider", async (req, res) => {
   try {
     const { name, phone, password, picture, image_car, plate_number, car_type } = req.body ?? {};
     const user = await createUser({ name, phone, password, picture, role: 1 });
@@ -165,7 +165,7 @@ app.post("/api/register/rider", async (req, res) => {
 });
 
 /** เพิ่มที่อยู่ให้ user (เรียกทีหลัง) */
-app.post("/api/users/:id/addresses", async (req, res) => {
+app.post("/users/:id/addresses", async (req, res) => {
   try {
     const user_id = String(req.params.id);
     const exists = await db.collection(USER_COL).doc(user_id).get();
@@ -180,7 +180,7 @@ app.post("/api/users/:id/addresses", async (req, res) => {
 });
 
 /** Users CRUD */
-app.get("/api/users", async (req, res) => {
+app.get("/users", async (req, res) => {
   try {
     const limit = Number(req.query.limit || 50);
     let q = db.collection(USER_COL).orderBy("user_id", "asc").limit(limit);
@@ -192,7 +192,7 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
-app.get("/api/users/:id", async (req, res) => {
+app.get("/users/:id", async (req, res) => {
   try {
     const doc = await db.collection(USER_COL).doc(String(req.params.id)).get();
     if (!doc.exists) return res.status(404).json({ error: "not found" });
@@ -202,7 +202,7 @@ app.get("/api/users/:id", async (req, res) => {
   }
 });
 
-app.get("/api/users/by-phone/:phone", async (req, res) => {
+app.get("/users/by-phone/:phone", async (req, res) => {
   try {
     const snap = await db.collection(USER_COL).where("phone","==",String(req.params.phone)).limit(1).get();
     if (snap.empty) return res.status(404).json({ error: "not found" });
@@ -213,7 +213,7 @@ app.get("/api/users/by-phone/:phone", async (req, res) => {
   }
 });
 
-app.patch("/api/users/:id", async (req, res) => {
+app.patch("/users/:id", async (req, res) => {
   try {
     const ref = db.collection(USER_COL).doc(String(req.params.id));
     const before = await ref.get();
@@ -238,7 +238,7 @@ app.patch("/api/users/:id", async (req, res) => {
   }
 });
 
-app.delete("/api/users/:id", async (req, res) => {
+app.delete("/users/:id", async (req, res) => {
   try {
     const ref = db.collection(USER_COL).doc(String(req.params.id));
     const doc = await ref.get();
@@ -251,7 +251,7 @@ app.delete("/api/users/:id", async (req, res) => {
 });
 
 /** Login */
-app.post("/api/login", async (req, res) => {
+app.post("/login", async (req, res) => {
   try {
     const { phone, password } = req.body ?? {};
     if (!phone || !password)
