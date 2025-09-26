@@ -1,0 +1,14 @@
+{
+  "name": "deploy_api_server",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": "20.x" },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.5.0"
+  }
+}
