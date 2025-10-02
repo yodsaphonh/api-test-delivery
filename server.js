@@ -100,26 +100,6 @@ async function createUser({ name, password, phone, picture, role }) {
   return { id, ...data };
 }
 
-async function createAddress({ user_id, address, lat, lng }) {
-  if (!user_id || !address) {
-    const e = new Error("user_id and address are required");
-    e.code = 400; throw e;
-  }
-  const addrIdNum = await nextId("address_seq");
-  const addrId = String(addrIdNum);
-
-  const payload = {
-    address_id: addrIdNum,
-    user_id: isNaN(Number(user_id)) ? String(user_id) : Number(user_id),
-    address: String(address),
-    lat: lat == null ? null : Number(lat),
-    lng: lng == null ? null : Number(lng),
-  };
-
-  await db.collection(ADDR_COL).doc(addrId).set(payload);
-  return { id: addrId, ...payload };
-}
-
 async function createRiderCar({ user_id, image_car, plate_number, car_type }) {
   if (!user_id || !plate_number || !car_type) {
     const e = new Error("user_id, plate_number, car_type are required");
@@ -138,6 +118,43 @@ async function createRiderCar({ user_id, image_car, plate_number, car_type }) {
 
   await db.collection(RIDER_COL).doc(riderId).set(payload);
   return { id: riderId, ...payload };
+}
+
+/* ------------------------------ Address creator ------------------------------ */
+/*  - Auto-increment address_id จาก _counters/address_seq (global)
+    - ตรวจ user มีจริง + เก็บ createdAt/updatedAt                           */
+async function createAddress({ user_id, address, lat, lng }) {
+  if (!user_id || !address) {
+    const e = new Error("user_id and address are required");
+    e.code = 400; throw e;
+  }
+
+  // 1) ตรวจ user
+  const uid = Number(user_id);
+  const userDoc = await db.collection(USER_COL).doc(String(uid)).get();
+  if (!userDoc.exists) {
+    const e = new Error("user not found");
+    e.code = 404; throw e;
+  }
+
+  // 2) Auto-increment
+  const addressIdNum = await nextId("address_seq"); // 1,2,3,...
+
+  // 3) เขียนเอกสาร
+  const now = new Date();
+  const docId = String(addressIdNum);
+  const payload = {
+    address_id: addressIdNum,
+    user_id: uid,
+    address: String(address),
+    lat: lat == null ? null : Number(lat),
+    lng: lng == null ? null : Number(lng),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await db.collection(ADDR_COL).doc(docId).set(payload);
+  return { id: docId, ...payload };
 }
 
 /* ---------------------------------- Routes ---------------------------------- */
@@ -164,113 +181,129 @@ app.post("/register/rider", async (req, res) => {
   }
 });
 
-/** เพิ่มที่อยู่ให้ user (เรียกทีหลัง) */
-app.post("/users/:id/addresses", async (req, res) => {
+/* =============================== Addresses (BODY ONLY) =============================== */
+/** CREATE — เพิ่มที่อยู่ให้ผู้ใช้
+ *  POST /users/addresses
+ *  body: { user_id:number, address:string, lat?:number, lng?:number }
+ */
+app.post("/users/addresses", async (req, res) => {
   try {
-    const user_id = String(req.params.id);
-    const exists = await db.collection(USER_COL).doc(user_id).get();
-    if (!exists.exists) return res.status(404).json({ error: "user not found" });
-
-    const { address, lat, lng } = req.body ?? {};
-    const addr = await createAddress({ user_id, address, lat, lng });
-    return res.status(201).json({ address: addr });
+    const { user_id, address, lat, lng } = req.body ?? {};
+    const doc = await createAddress({ user_id, address, lat, lng });
+    return res.status(201).json(doc);
   } catch (e) {
     return res.status(e.code || 400).json({ error: e.message });
   }
 });
 
-/** Users CRUD */
-app.get("/users", async (req, res) => {
+/** LIST — ที่อยู่ทั้งหมดของ user (แบ่งหน้า)
+ *  POST /users/addresses/list
+ *  body: { user_id:number, limit?:number<=100, startAfter?:number(address_id) }
+ */
+app.post("/users/addresses/list", async (req, res) => {
   try {
-    const limit = Number(req.query.limit || 50);
-    let q = db.collection(USER_COL).orderBy("user_id", "asc").limit(limit);
-    if (req.query.startAfter) q = q.startAfter(Number(req.query.startAfter));
+    const { user_id, limit, startAfter } = req.body ?? {};
+    if (user_id == null) return res.status(400).json({ error: "user_id is required" });
+
+    const uid = Number(user_id);
+    const take = Math.min(Number(limit || 50), 100);
+
+    let q = db.collection(ADDR_COL)
+      .where("user_id", "==", uid)
+      .orderBy("address_id", "asc")
+      .limit(take);
+
+    if (startAfter != null) q = q.startAfter(Number(startAfter));
+
     const snap = await q.get();
-    res.json({ items: snap.docs.map(d => ({ id: d.id, ...d.data() })), count: snap.size });
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const last = items.length ? items[items.length - 1].address_id : null;
+
+    return res.json({ count: items.length, lastAddressId: last, items });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    // ถ้าขึ้น "requires an index" ให้สร้าง composite index: WHERE user_id == + ORDER BY address_id ASC
+    return res.status(400).json({ error: e.message });
   }
 });
 
-app.get("/users/:id", async (req, res) => {
+/** GET ONE — ดูที่อยู่ทีละรายการ
+ *  POST /addresses/get
+ *  body: { address_doc_id?:string, address_id?:number }  (อย่างใดอย่างหนึ่ง)
+ */
+app.post("/addresses/get", async (req, res) => {
   try {
-    const doc = await db.collection(USER_COL).doc(String(req.params.id)).get();
-    if (!doc.exists) return res.status(404).json({ error: "not found" });
-    res.json({ id: doc.id, ...doc.data() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+    const { address_doc_id, address_id } = req.body ?? {};
+    if (!address_doc_id && address_id == null) {
+      return res.status(400).json({ error: "address_doc_id or address_id is required" });
+    }
 
-app.get("/users/by-phone/:phone", async (req, res) => {
-  try {
-    const snap = await db.collection(USER_COL).where("phone","==",String(req.params.phone)).limit(1).get();
+    if (address_doc_id) {
+      const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: "not found" });
+      return res.json({ id: doc.id, ...doc.data() });
+    }
+
+    const snap = await db.collection(ADDR_COL)
+      .where("address_id", "==", Number(address_id))
+      .limit(1).get();
+
     if (snap.empty) return res.status(404).json({ error: "not found" });
-    const doc = snap.docs[0];
-    res.json({ id: doc.id, ...doc.data() });
+    const d = snap.docs[0];
+    return res.json({ id: d.id, ...d.data() });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message });
   }
 });
 
-app.patch("/users/:id", async (req, res) => {
+/** PATCH — แก้ไขบางฟิลด์ของที่อยู่ (อัปเดต updatedAt อัตโนมัติ)
+ *  POST /addresses/patch
+ *  body: { address_doc_id:string, address?:string, lat?:number, lng?:number }
+ */
+app.post("/addresses/patch", async (req, res) => {
   try {
-    const ref = db.collection(USER_COL).doc(String(req.params.id));
+    const { address_doc_id, address, lat, lng } = req.body ?? {};
+    if (!address_doc_id) return res.status(400).json({ error: "address_doc_id is required" });
+
+    const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
     const before = await ref.get();
     if (!before.exists) return res.status(404).json({ error: "not found" });
 
-    const allowed = ["name","password","phone","picture","role"];
     const patch = {};
-    for (const k of allowed) if (k in req.body) patch[k] = req.body[k];
-    if ("role" in patch) patch.role = normalizeRoleInt(patch.role);
+    if (address !== undefined) patch.address = String(address);
+    if (lat !== undefined)     patch.lat = (lat == null ? null : Number(lat));
+    if (lng !== undefined)     patch.lng = (lng == null ? null : Number(lng));
+    patch.updatedAt = new Date();
 
-    if ("phone" in patch && patch.phone) {
-      const dup = await db.collection(USER_COL).where("phone","==",String(patch.phone)).limit(1).get();
-      if (!dup.empty && dup.docs[0].id !== ref.id)
-        return res.status(409).json({ error: "phone already exists" });
+    if (Object.keys(patch).length === 1) { // มีแต่ updatedAt อย่างเดียว
+      return res.status(400).json({ error: "nothing to update" });
     }
 
     await ref.update(patch);
     const after = await ref.get();
-    res.json({ id: after.id, ...after.data() });
+    return res.json({ id: after.id, ...after.data() });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    return res.status(400).json({ error: e.message });
   }
 });
 
-app.delete("/users/:id", async (req, res) => {
+/** DELETE — ลบที่อยู่
+ *  POST /addresses/delete
+ *  body: { address_doc_id:string }
+ */
+app.post("/addresses/delete", async (req, res) => {
   try {
-    const ref = db.collection(USER_COL).doc(String(req.params.id));
+    const { address_doc_id } = req.body ?? {};
+    if (!address_doc_id) return res.status(400).json({ error: "address_doc_id is required" });
+
+    const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: "not found" });
+
     await ref.delete();
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/** Login */
-app.post("/login", async (req, res) => {
-  try {
-    const { phone, password } = req.body ?? {};
-    if (!phone || !password)
-      return res.status(400).json({ error: "phone and password are required" });
-
-    const snap = await db.collection(USER_COL)
-      .where("phone","==",String(phone))
-      .limit(1)
-      .get();
-
-    if (snap.empty) return res.status(401).json({ error: "invalid credentials" });
-    const d = snap.docs[0];
-    const u = d.data();
-    if (String(u.password) !== String(password))
-      return res.status(401).json({ error: "invalid credentials" });
-
-    res.json({ id: d.id, name: u.name, phone: u.phone, role: Number(u.role) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message });
   }
 });
 
