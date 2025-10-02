@@ -235,134 +235,29 @@ app.post("/users/addresses", async (req, res) => {
   }
 });
 
-/** LIST — ที่อยู่ทั้งหมดของ user (แบ่งหน้า)
- *  POST /users/addresses/list
- *  body: { user_id:number, limit?:number<=100, startAfter?:number(address_id) }
- */
 app.post("/users/addresses/list", async (req, res) => {
   try {
-    const { user_id, limit, startAfter } = req.body ?? {};
+    const { user_id } = req.body ?? {};
     if (user_id == null) return res.status(400).json({ error: "user_id is required" });
 
     const uid = Number(user_id);
-    const take = Math.min(Number(limit || 50), 100);
 
-    let q = db.collection(ADDR_COL)
-      .where("user_id", "==", uid)
-      .orderBy("address_id", "asc")
-      .limit(take);
-
-    if (startAfter != null) q = q.startAfter(Number(startAfter));
-
-    const snap = await q.get();
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const last = items.length ? items[items.length - 1].address_id : null;
-
-    return res.json({ count: items.length, lastAddressId: last, items });
-  } catch (e) {
-    // ถ้าขึ้น "requires an index" ให้สร้าง composite index: WHERE user_id == + ORDER BY address_id ASC
-    return res.status(400).json({ error: e.message });
-  }
-});
-
-/** GET ONE — ดูที่อยู่ทีละรายการ
- *  POST /addresses/get
- *  body: { address_doc_id?:string, address_id?:number }  (อย่างใดอย่างหนึ่ง)
- */
-app.post("/addresses/get", async (req, res) => {
-  try {
-    const { address_doc_id, address_id } = req.body ?? {};
-    if (!address_doc_id && address_id == null) {
-      return res.status(400).json({ error: "address_doc_id or address_id is required" });
-    }
-
-    if (address_doc_id) {
-      const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
-      const doc = await ref.get();
-      if (!doc.exists) return res.status(404).json({ error: "not found" });
-      return res.json({ id: doc.id, ...doc.data() });
-    }
-
+    // ไม่มี orderBy -> ไม่ต้องใช้ composite index
     const snap = await db.collection(ADDR_COL)
-      .where("address_id", "==", Number(address_id))
-      .limit(1).get();
+      .where("user_id", "==", uid)
+      .get();
 
-    if (snap.empty) return res.status(404).json({ error: "not found" });
-    const d = snap.docs[0];
-    return res.json({ id: d.id, ...d.data() });
+    // เรียงในหน่วยความจำตาม address_id (asc)
+    const items = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (Number(a.address_id || 0) - Number(b.address_id || 0)));
+
+    return res.json({ count: items.length, items });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
-/** PATCH — แก้ไขบางฟิลด์ของที่อยู่ (อัปเดต updatedAt อัตโนมัติ)
- *  POST /addresses/patch
- *  body: { address_doc_id:string, address?:string, lat?:number, lng?:number }
- */
-app.post("/addresses/patch", async (req, res) => {
-  try {
-    const { address_doc_id, address, lat, lng } = req.body ?? {};
-    if (!address_doc_id) return res.status(400).json({ error: "address_doc_id is required" });
-
-    const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
-    const before = await ref.get();
-    if (!before.exists) return res.status(404).json({ error: "not found" });
-
-    const patch = {};
-    if (address !== undefined) patch.address = String(address);
-    if (lat !== undefined)     patch.lat = (lat == null ? null : Number(lat));
-    if (lng !== undefined)     patch.lng = (lng == null ? null : Number(lng));
-    patch.updatedAt = new Date();
-
-    if (Object.keys(patch).length === 1) { // มีแต่ updatedAt อย่างเดียว
-      return res.status(400).json({ error: "nothing to update" });
-    }
-
-    await ref.update(patch);
-    const after = await ref.get();
-    return res.json({ id: after.id, ...after.data() });
-  } catch (e) {
-    return res.status(400).json({ error: e.message });
-  }
-});
-
-/** DELETE — ลบที่อยู่
- *  POST /addresses/delete
- *  body: { address_doc_id:string }
- */
-app.post("/addresses/delete", async (req, res) => {
-  try {
-    const { address_doc_id } = req.body ?? {};
-    if (!address_doc_id) return res.status(400).json({ error: "address_doc_id is required" });
-
-    const ref = db.collection(ADDR_COL).doc(String(address_doc_id));
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: "not found" });
-
-    await ref.delete();
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-
-//upload and update Profile IMG
-app.put("/users/photo/:uid", async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const { photoUrl } = req.body;
-    if (!photoUrl) return res.status(400).json({ error: "photoUrl is required" });
-
-    await admin.firestore().collection("users").doc(uid).set(
-      { photoUrl, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
 /* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
