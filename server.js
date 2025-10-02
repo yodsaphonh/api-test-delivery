@@ -196,6 +196,29 @@ app.post("/register/rider", async (req, res) => {
   }
 });
 
+app.post("/login", async (req, res) => {
+  try {
+    const { phone, password } = req.body ?? {};
+    if (!phone || !password)
+      return res.status(400).json({ error: "phone and password are required" });
+
+    const snap = await db.collection(USER_COL)
+      .where("phone","==",String(phone))
+      .limit(1)
+      .get();
+
+    if (snap.empty) return res.status(401).json({ error: "invalid credentials" });
+    const d = snap.docs[0];
+    const u = d.data();
+    if (String(u.password) !== String(password))
+      return res.status(401).json({ error: "invalid credentials" });
+
+    res.json({ id: d.id, name: u.name, phone: u.phone, role: Number(u.role) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* =============================== Addresses (BODY ONLY) =============================== */
 /** CREATE — เพิ่มที่อยู่ให้ผู้ใช้
  *  POST /users/addresses
@@ -322,6 +345,23 @@ app.post("/addresses/delete", async (req, res) => {
   }
 });
 
+
+//upload and update Profile IMG
+app.put("/users/photo/:uid", async (req, res) => {
+  try {
+    const { uid } = req.params;
+    const { photoUrl } = req.body;
+    if (!photoUrl) return res.status(400).json({ error: "photoUrl is required" });
+
+    await admin.firestore().collection("users").doc(uid).set(
+      { photoUrl, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 /* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
