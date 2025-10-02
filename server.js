@@ -25,8 +25,8 @@ const db = admin.firestore();
 /* ---------------------------------- Express ---------------------------------- */
 const app = express();
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 /* -------------------------------- Collections -------------------------------- */
 const USER_COL  = "user";          // role: 0=user, 1=rider
