@@ -44,6 +44,16 @@ app.get("/users/:id", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+app.get("/users", async (req, res) => {
+  try {
+    const snap = await db.collection(USER_COL).get();
+    const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return res.json({ count: users.length, users });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 
 /* ---------------------- Auto-increment Counter (transaction) ---------------------- */
 async function nextId(sequence) {
