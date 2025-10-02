@@ -129,7 +129,7 @@ async function createAddress({ user_id, address, lat, lng }) {
     e.code = 400; throw e;
   }
 
-  // 1) ตรวจ user
+  // ตรวจว่ามี user จริง
   const uid = Number(user_id);
   const userDoc = await db.collection(USER_COL).doc(String(uid)).get();
   if (!userDoc.exists) {
@@ -137,20 +137,16 @@ async function createAddress({ user_id, address, lat, lng }) {
     e.code = 404; throw e;
   }
 
-  // 2) Auto-increment
+  // Auto-increment address_id จาก _counters/address_seq
   const addressIdNum = await nextId("address_seq"); // 1,2,3,...
-
-  // 3) เขียนเอกสาร
-  const now = new Date();
   const docId = String(addressIdNum);
+
   const payload = {
-    address_id: addressIdNum,
-    user_id: uid,
+    address_id: addressIdNum,     // number
+    user_id: uid,                 // number
     address: String(address),
     lat: lat == null ? null : Number(lat),
     lng: lng == null ? null : Number(lng),
-    createdAt: now,
-    updatedAt: now,
   };
 
   await db.collection(ADDR_COL).doc(docId).set(payload);
