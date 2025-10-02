@@ -35,6 +35,20 @@ const COUNTERS  = "_counters";     // seq storage
 
 /* --------------------------------- Healthcheck -------------------------------- */
 app.get("/", (_, res) => res.send("API on Render 🚀"));
+app.get("/users/get", async (req, res) => {
+  try {
+    const id = req.query.id;
+    if (id == null || id === "") {
+      return res.status(400).json({ error: "id is required (use /users/get?id=1)" });
+    }
+
+    const doc = await db.collection(USER_COL).doc(String(id)).get();
+    if (!doc.exists) return res.status(404).json({ error: "not found" });
+    return res.json({ id: doc.id, ...doc.data() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 /* ---------------------- Auto-increment Counter (transaction) ---------------------- */
 async function nextId(sequence) {
