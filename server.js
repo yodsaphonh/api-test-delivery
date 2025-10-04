@@ -258,6 +258,25 @@ app.post("/users/addresses/list", async (req, res) => {
   }
 });
 
+app.post("/users/by-phone", async (req, res) => {
+  try {
+    const { phone } = req.body ?? {};
+    if (!phone) return res.status(400).json({ error: "phone is required" });
+
+    const snap = await db.collection(USER_COL)
+      .where("phone", "==", String(phone))
+      .limit(1)
+      .get();
+
+    if (snap.empty) return res.status(404).json({ error: "not found" });
+
+    const d = snap.docs[0];
+    return res.json({ id: d.id, ...d.data() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 /* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
