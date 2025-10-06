@@ -277,7 +277,41 @@ app.post("/users/by-phone", async (req, res) => {
   }
 });
 
-/* ------------------------------- Start server ------------------------------- */
+
+//delete address
+app.post("/users/addresses/delete", async (req, res) => {
+  try {
+    const { user_id, address_id } = req.body ?? {};
+
+    if (user_id == null || address_id == null) {
+      return res.status(400).json({ error: "user_id and address_id are required" });
+    }
+
+    const uid = Number(user_id);
+    const aid = Number(address_id);
+
+    // ตรวจว่า address นั้นมีอยู่จริง
+    const docRef = db.collection(ADDR_COL).doc(String(aid));
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      return res.status(404).json({ error: "address not found" });
+    }
+
+    const data = docSnap.data();
+    if (Number(data.user_id) !== uid) {
+      return res.status(403).json({ error: "not authorized to delete this address" });
+    }
+
+    // ลบ document
+    await docRef.delete();
+
+    return res.json({ ok: true, message: `address_id ${aid} deleted successfully` });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+//* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on :${PORT}`);
