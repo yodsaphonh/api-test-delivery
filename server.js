@@ -33,6 +33,7 @@ const USER_COL  = "user";          // role: 0=user, 1=rider
 const ADDR_COL  = "user_address";  // address_id, user_id, address, lat, lng
 const RIDER_COL = "rider_car";     // rider_id, user_id, image_car, plate_number, car_type
 const COUNTERS  = "_counters";     // seq storage
+const DELIVERY_COL = "delivery";   // delivery_id, user_id_sender, user_id_receiver, ...
 
 /* --------------------------------- Healthcheck -------------------------------- */
 app.get("/", (_, res) => res.send("API on Render 🚀"));
@@ -307,6 +308,227 @@ app.post("/users/addresses/delete", async (req, res) => {
     await docRef.delete();
 
     return res.json({ ok: true, message: `address_id ${aid} deleted successfully` });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+//create delivery
+/* ----------------------- 1. ค้นหาเบอร์ผู้รับ -----------------------
+POST /delivery/search-receiver
+body: { phone: "0822054489" }
+------------------------------------------------------------------ */
+app.post("/delivery/search-receiver", async (req, res) => {
+  try {
+    const { phone } = req.body ?? {};
+    if (!phone) return res.status(400).json({ error: "phone is required" });
+
+    // หา user จากเบอร์
+    const userSnap = await db.collection(USER_COL)
+      .where("phone", "==", String(phone))
+      .limit(1)
+      .get();
+
+    if (userSnap.empty) {
+      return res.status(404).json({ error: "receiver not found" });
+    }
+
+    const userDoc = userSnap.docs[0];
+    const user = userDoc.data();
+
+    // หา address ของ user_id นี้
+    const addrSnap = await db.collection(ADDR_COL)
+      .where("user_id", "==", Number(user.user_id))
+      .get();
+
+    const addresses = addrSnap.docs.map(d => ({
+      id: d.id,
+      ...d.data(),
+    }));
+
+    return res.json({
+      receiver: {
+        user_id: user.user_id,
+        name: user.name,
+        phone: user.phone,
+        addresses,
+      },
+    });
+
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* ----------------------- 2. ฟังก์ชันสร้าง delivery ----------------------- */
+async function createDelivery({
+  user_id_sender,
+  user_id_receiver,
+  phone_receiver,
+  address_id_sender,
+  address_id_receiver,
+  picture_status1,
+  detail_product,
+  amount,
+  status
+}) {
+  if (!user_id_sender || !user_id_receiver || !address_id_sender || !address_id_receiver) {
+    const e = new Error("user_id_sender, user_id_receiver, address_id_sender, address_id_receiver are required");
+    e.code = 400; throw e;
+  }
+
+  // ตรวจสอบ sender / receiver
+  const senderDoc = await db.collection(USER_COL).doc(String(user_id_sender)).get();
+  if (!senderDoc.exists) {
+    const e = new Error("sender not found");
+    e.code = 404; throw e;
+  }
+
+  const receiverDoc = await db.collection(USER_COL).doc(String(user_id_receiver)).get();
+  if (!receiverDoc.exists) {
+    const e = new Error("receiver not found");
+    e.code = 404; throw e;
+  }
+
+  // ตรวจ address sender/receiver
+  const addrSender = await db.collection(ADDR_COL).doc(String(address_id_sender)).get();
+  const addrReceiver = await db.collection(ADDR_COL).doc(String(address_id_receiver)).get();
+  if (!addrSender.exists || !addrReceiver.exists) {
+    const e = new Error("address sender or receiver not found");
+    e.code = 404; throw e;
+  }
+
+  // Auto-increment id
+  const deliveryIdNum = await nextId("delivery_seq");
+  const docId = String(deliveryIdNum);
+
+  const payload = {
+    delivery_id: deliveryIdNum,
+    user_id_sender: Number(user_id_sender),
+    user_id_receiver: Number(user_id_receiver),
+    phone_receiver: phone_receiver ? String(phone_receiver) : null,
+    address_id_sender: Number(address_id_sender),
+    address_id_receiver: Number(address_id_receiver),
+    picture_status1: picture_status1 || null,
+    detail_product: detail_product ? String(detail_product) : "",
+    amount: Number(amount || 1),
+    status: status ? String(status) : "waiting",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await db.collection(DELIVERY_COL).doc(docId).set(payload);
+  return { id: docId, ...payload };
+}
+
+
+/* ----------------------- 3. Create Delivery -----------------------
+POST /delivery/create
+body: {
+  user_id_sender: 1,
+  user_id_receiver: 2,
+  phone_receiver: "0998765432",
+  address_id_sender: 1,
+  address_id_receiver: 5,
+  detail_product: "กล่องของขวัญ",
+  amount: 1,
+  status: "waiting"
+}
+------------------------------------------------------------------ */
+app.post("/delivery/create", async (req, res) => {
+  try {
+    const data = req.body ?? {};
+    const delivery = await createDelivery(data);
+    return res.status(201).json({ ok: true, delivery });
+  } catch (e) {
+    return res.status(e.code || 400).json({ error: e.message });
+  }
+});
+
+
+/* ----------------------- 4. List Delivery ของผู้ใช้ -----------------------
+POST /delivery/list-by-user
+body: { user_id: 1 }
+------------------------------------------------------------------ */
+app.post("/delivery/list-by-user", async (req, res) => {
+  try {
+    const { user_id } = req.body ?? {};
+    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+
+    const snap = await db.collection(DELIVERY_COL)
+      .where("user_id_sender", "==", Number(user_id))
+      .get();
+
+    const deliveries = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => Number(a.delivery_id || 0) - Number(b.delivery_id || 0));
+
+    return res.json({ count: deliveries.length, deliveries });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* ----------------------- 5. Get Delivery Detail -----------------------
+GET /delivery/detail/:id
+------------------------------------------------------------------ */
+app.get("/delivery/detail/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ error: "delivery_id required" });
+
+    const doc = await db.collection(DELIVERY_COL).doc(String(id)).get();
+    if (!doc.exists) return res.status(404).json({ error: "not found" });
+
+    return res.json({ id: doc.id, ...doc.data() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* ----------------------- 6. Update Delivery Status -----------------------
+POST /delivery/update-status
+body: { delivery_id: 1, status: "accepted" }
+------------------------------------------------------------------ */
+app.post("/delivery/update-status", async (req, res) => {
+  try {
+    const { delivery_id, status } = req.body ?? {};
+    if (!delivery_id || !status)
+      return res.status(400).json({ error: "delivery_id and status are required" });
+
+    const docRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
+    const snap = await docRef.get();
+    if (!snap.exists) return res.status(404).json({ error: "delivery not found" });
+
+    await docRef.update({
+      status: String(status),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return res.json({ ok: true, message: "status updated" });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+/* ----------------------- 7. Delete Delivery -----------------------
+POST /delivery/delete
+body: { delivery_id: 1 }
+------------------------------------------------------------------ */
+app.post("/delivery/delete", async (req, res) => {
+  try {
+    const { delivery_id } = req.body ?? {};
+    if (!delivery_id) return res.status(400).json({ error: "delivery_id required" });
+
+    const docRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
+    const snap = await docRef.get();
+    if (!snap.exists) return res.status(404).json({ error: "delivery not found" });
+
+    await docRef.delete();
+    return res.json({ ok: true, message: `delivery_id ${delivery_id} deleted successfully` });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
