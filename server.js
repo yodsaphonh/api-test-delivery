@@ -414,7 +414,6 @@ async function createDelivery({
     detail_product: detail_product ? String(detail_product) : "",
     amount: Number(amount || 1),
     status: status ? String(status) : "waiting",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   await db.collection(DELIVERY_COL).doc(docId).set(payload);
