@@ -362,6 +362,7 @@ app.post("/delivery/search-receiver", async (req, res) => {
 
 
 /* ----------------------- 2. ฟังก์ชันสร้าง delivery ----------------------- */
+/* ----------------------- 2. ฟังก์ชันสร้าง delivery ----------------------- */
 async function createDelivery({
   user_id_sender,
   user_id_receiver,
@@ -369,6 +370,7 @@ async function createDelivery({
   address_id_sender,
   address_id_receiver,
   picture_status1,
+  name_product,
   detail_product,
   amount,
   status
@@ -411,27 +413,32 @@ async function createDelivery({
     address_id_sender: Number(address_id_sender),
     address_id_receiver: Number(address_id_receiver),
     picture_status1: picture_status1 || null,
+
+    // ✅ เพิ่ม name_product เข้า payload
+    name_product: name_product ? String(name_product) : "",
+
     detail_product: detail_product ? String(detail_product) : "",
     amount: Number(amount || 1),
     status: status ? String(status) : "waiting",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   await db.collection(DELIVERY_COL).doc(docId).set(payload);
   return { id: docId, ...payload };
 }
 
-
 /* ----------------------- 3. Create Delivery -----------------------
 POST /delivery/create
 body: {
-  user_id_sender: 1,
-  user_id_receiver: 2,
-  phone_receiver: "0998765432",
-  address_id_sender: 1,
-  address_id_receiver: 5,
-  detail_product: "กล่องของขวัญ",
-  amount: 1,
-  status: "waiting"
+  "user_id_sender": 1,
+  "user_id_receiver": 2,
+  "phone_receiver": "0998765432",
+  "address_id_sender": 1,
+  "address_id_receiver": 5,
+  "name_product": "Iphon 10",
+  "detail_product": "ไม่บอกหรอคเขิน",
+  "amount": 1,
+  "status": "waiting"
 }
 ------------------------------------------------------------------ */
 app.post("/delivery/create", async (req, res) => {

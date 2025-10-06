@@ -143,7 +143,7 @@ async function createRiderCar({ user_id, image_car, plate_number, car_type }) {
 
 /* ------------------------------ Address creator ------------------------------ */
 /*  - Auto-increment address_id จาก _counters/address_seq (global)
-    - ตรวจ user มีจริง + เก็บ createdAt/updatedAt                           */
+ */
 async function createAddress({ user_id, address, lat, lng }) {
   if (!user_id || !address) {
     const e = new Error("user_id and address are required");
@@ -420,7 +420,6 @@ async function createDelivery({
     detail_product: detail_product ? String(detail_product) : "",
     amount: Number(amount || 1),
     status: status ? String(status) : "waiting",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
   await db.collection(DELIVERY_COL).doc(docId).set(payload);
