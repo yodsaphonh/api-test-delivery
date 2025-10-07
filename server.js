@@ -362,7 +362,6 @@ app.post("/delivery/search-receiver", async (req, res) => {
 
 
 /* ----------------------- 2. ฟังก์ชันสร้าง delivery ----------------------- */
-/* ----------------------- 2. ฟังก์ชันสร้าง delivery ----------------------- */
 async function createDelivery({
   user_id_sender,
   user_id_receiver,
@@ -372,6 +371,7 @@ async function createDelivery({
   picture_status1,
   name_product,
   detail_product,
+  picture_product,
   amount,
   status
 }) {
@@ -416,6 +416,7 @@ async function createDelivery({
 
     // ✅ เพิ่ม name_product เข้า payload
     name_product: name_product ? String(name_product) : "",
+    picture_product: picture_product || null,
 
     detail_product: detail_product ? String(detail_product) : "",
     amount: Number(amount || 1),
@@ -434,8 +435,9 @@ body: {
   "phone_receiver": "0998765432",
   "address_id_sender": 1,
   "address_id_receiver": 5,
-  "name_product": "Iphon 10",
-  "detail_product": "ไม่บอกหรอคเขิน",
+  "name_product": "Iphone 10",
+  "detail_product": "สีดำ 128GB",
+  "picture_product": "https://res.cloudinary.com/.../iphone10.jpg",
   "amount": 1,
   "status": "waiting"
 }
