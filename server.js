@@ -236,6 +236,28 @@ app.post("/users/addresses", async (req, res) => {
   }
 });
 
+/* ----------------------- Get Address By ID -----------------------
+GET /users/address/1
+------------------------------------------------------------------ */
+app.get("/users/address/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "address_id is required" });
+
+    // ดึง document จาก collection user_address
+    const doc = await db.collection(ADDR_COL).doc(String(id)).get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: "address not found" });
+    }
+
+    // ส่งข้อมูลกลับทั้งหมด
+    return res.json({ id: doc.id, ...doc.data() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
 app.post("/users/addresses/list", async (req, res) => {
   try {
     const { user_id } = req.body ?? {};
@@ -414,9 +436,9 @@ async function createDelivery({
     address_id_receiver: Number(address_id_receiver),
     picture_status1: picture_status1 || null,
 
-    // ✅ เพิ่ม name_product เข้า payload
     name_product: name_product ? String(name_product) : "",
     picture_product: picture_product || null,
+    
 
     detail_product: detail_product ? String(detail_product) : "",
     amount: Number(amount || 1),
