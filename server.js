@@ -481,8 +481,8 @@ body: { user_id: 1 }
 ------------------------------------------------------------------ */
 app.post("/delivery/list-by-user", async (req, res) => {
   try {
-    const { user_id } = req.body ?? {};
-    if (!user_id) return res.status(400).json({ error: "user_id is required" });
+    const { user_id_sender } = req.body ?? {};
+    if (!user_id_sender) return res.status(400).json({ error: "user_id is required" });
 
     const snap = await db.collection(DELIVERY_COL)
       .where("user_id_sender", "==", Number(user_id))
@@ -497,7 +497,6 @@ app.post("/delivery/list-by-user", async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
-
 
 /* ----------------------- 5. Get Delivery Detail -----------------------
 GET /delivery/detail/:id
