@@ -681,7 +681,7 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
       return res.status(404).json({ error: "delivery not found" });
 
     const deliveryData = deliveryDoc.data();
-    if (deliveryData.status !== "waiting")
+    if (deliveryData.status !== "accept")
       return res.status(400).json({ error: "Delivery already accepted or in progress" });
 
     const assiIdNum = await nextId("assi_seq");
