@@ -579,51 +579,57 @@ app.get("/deliveries/waiting", async (req, res) => {
 
 app.get("/deliveries/waiting", async (req, res) => {
   try {
-    const snapshot = await db
-      .collection("delivery")
-      .where("status", "==", "waiting")
-      .get();
-
-    const deliveries = [];
-
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-
-      // 🔹 ดึง address sender Test
-      let addressSender = null;
-      if (data.address_id_sender) {
-        const senderDoc = await db
-          .collection("user_address")
-          .doc(String(data.address_id_sender))
-          .get();
-        if (senderDoc.exists) {
-          addressSender = senderDoc.data();
-        }
-      }
-
-      // 🔹 ดึง address receiver
-      let addressReceiver = null;
-      if (data.address_id_receiver) {
-        const receiverDoc = await db
-          .collection("user_address")
-          .doc(String(data.address_id_receiver))
-          .get();
-        if (receiverDoc.exists) {
-          addressReceiver = receiverDoc.data();
-        }
-      }
-
-      deliveries.push({
-        id: doc.id,
-        ...data,
-        address_sender: addressSender,
-        address_receiver: addressReceiver,
-      });
-    }
-
+    const snapshot = await db.collection("delivery").where("status", "==", "waiting").get();
+    const deliveries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.json(deliveries);
   } catch (e) {
-    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/delivery/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const DELIVERY_COL = "delivery";
+
+    // 🔹 1. ดึงข้อมูล delivery ตาม id (id คือ document id ใน Firestore)
+    const deliveryDoc = await db.collection(DELIVERY_COL).doc(String(id)).get();
+    if (!deliveryDoc.exists) {
+      return res.status(404).json({ error: "delivery not found" });
+    }
+
+    const delivery = { id: deliveryDoc.id, ...deliveryDoc.data() };
+
+    // 🔹 2. ดึงที่อยู่ผู้ส่ง
+    let addressSender = null;
+    if (delivery.address_id_sender) {
+      const addrSenderDoc = await db
+        .collection("user_address")
+        .doc(String(delivery.address_id_sender))
+        .get();
+      if (addrSenderDoc.exists) addressSender = addrSenderDoc.data();
+    }
+
+    // 🔹 3. ดึงที่อยู่ผู้รับ
+    let addressReceiver = null;
+    if (delivery.address_id_receiver) {
+      const addrReceiverDoc = await db
+        .collection("user_address")
+        .doc(String(delivery.address_id_receiver))
+        .get();
+      if (addrReceiverDoc.exists) addressReceiver = addrReceiverDoc.data();
+    }
+
+    // 🔹 4. รวมข้อมูลทั้งหมด
+    const result = {
+      ...delivery,
+      address_sender: addressSender,
+      address_receiver: addressReceiver,
+    };
+
+    res.json(result);
+  } catch (e) {
+    console.error("Error in /delivery/:id:", e);
     res.status(500).json({ error: e.message });
   }
 });
