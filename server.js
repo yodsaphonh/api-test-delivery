@@ -474,7 +474,6 @@ app.post("/delivery/create", async (req, res) => {
   }
 });
 
-
 /* ----------------------- 4. List Delivery ของผู้ใช้ -----------------------
 POST /delivery/list-by-user
 body: { user_id: 1 }
@@ -482,10 +481,15 @@ body: { user_id: 1 }
 app.post("/delivery/list-by-user", async (req, res) => {
   try {
     const { user_id_sender } = req.body ?? {};
-    if (!user_id_sender) return res.status(400).json({ error: "user_id is required" });
+    if (!user_id_sender) {
+      return res.status(400).json({ error: "user_id_sender is required" });
+    }
 
-    const snap = await db.collection(DELIVERY_COL)
-      .where("user_id_sender", "==", Number(user_id))
+    const DELIVERY_COL = "delivery"; 
+
+    const snap = await db
+      .collection(DELIVERY_COL)
+      .where("user_id_sender", "==", Number(user_id_sender))
       .get();
 
     const deliveries = snap.docs
@@ -494,6 +498,7 @@ app.post("/delivery/list-by-user", async (req, res) => {
 
     return res.json({ count: deliveries.length, deliveries });
   } catch (e) {
+    console.error(e);
     return res.status(500).json({ error: e.message });
   }
 });
