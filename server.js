@@ -629,7 +629,7 @@ app.post("/deliveries/accept", async (req, res) => {
     const { delivery_id, rider_id } = req.body ?? {};
 
     if (!delivery_id || !rider_id)
-      return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
+      return res.status(400).json({ error: "delivery_id, rider_id, are required" });
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
     const deliveryDoc = await deliveryRef.get();
     if (!deliveryDoc.exists)
@@ -646,8 +646,6 @@ app.post("/deliveries/accept", async (req, res) => {
       assi_id: assiIdNum,
       delivery_id: Number(delivery_id),
       rider_id: Number(rider_id),
-      picture_status2: picture_status2 || null, 
-      picture_status3: null,
       status: "accept",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
