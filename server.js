@@ -194,15 +194,6 @@ app.post("/register/rider", async (req, res) => {
     const rider_car = await createRiderCar({ user_id: user.id, image_car, plate_number, car_type });
     return res.status(201).json({ user, rider_car });
   } catch (e) {
-
-
-
-
-
-
-
-
-    
     return res.status(e.code || 400).json({ error: e.message, ...(e.payload || {}) });
   }
 });
@@ -253,13 +244,11 @@ app.get("/users/address/:id", async (req, res) => {
     const { id } = req.params;
     if (!id) return res.status(400).json({ error: "address_id is required" });
 
-    // ดึง document จาก collection user_address
     const doc = await db.collection(ADDR_COL).doc(String(id)).get();
     if (!doc.exists) {
       return res.status(404).json({ error: "address not found" });
     }
 
-    // ส่งข้อมูลกลับทั้งหมด
     return res.json({ id: doc.id, ...doc.data() });
   } catch (e) {
     return res.status(500).json({ error: e.message });
@@ -274,12 +263,10 @@ app.post("/users/addresses/list", async (req, res) => {
 
     const uid = Number(user_id);
 
-    // ไม่มี orderBy -> ไม่ต้องใช้ composite index
     const snap = await db.collection(ADDR_COL)
       .where("user_id", "==", uid)
       .get();
 
-    // เรียงในหน่วยความจำตาม address_id (asc)
     const items = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (Number(a.address_id || 0) - Number(b.address_id || 0)));
@@ -593,7 +580,6 @@ app.get("/delivery/:id", async (req, res) => {
     const { id } = req.params;
     const DELIVERY_COL = "delivery";
 
-    // 🔹 1. ดึงข้อมูล delivery ตาม id (id คือ document id ใน Firestore)
     const deliveryDoc = await db.collection(DELIVERY_COL).doc(String(id)).get();
     if (!deliveryDoc.exists) {
       return res.status(404).json({ error: "delivery not found" });
@@ -601,7 +587,6 @@ app.get("/delivery/:id", async (req, res) => {
 
     const delivery = { id: deliveryDoc.id, ...deliveryDoc.data() };
 
-    // 🔹 2. ดึงที่อยู่ผู้ส่ง
     let addressSender = null;
     if (delivery.address_id_sender) {
       const addrSenderDoc = await db
@@ -611,7 +596,6 @@ app.get("/delivery/:id", async (req, res) => {
       if (addrSenderDoc.exists) addressSender = addrSenderDoc.data();
     }
 
-    // 🔹 3. ดึงที่อยู่ผู้รับ
     let addressReceiver = null;
     if (delivery.address_id_receiver) {
       const addrReceiverDoc = await db
@@ -621,7 +605,6 @@ app.get("/delivery/:id", async (req, res) => {
       if (addrReceiverDoc.exists) addressReceiver = addrReceiverDoc.data();
     }
 
-    // 🔹 4. รวมข้อมูลทั้งหมด
     const result = {
       ...delivery,
       address_sender: addressSender,
@@ -636,15 +619,17 @@ app.get("/delivery/:id", async (req, res) => {
 });
 
 
+/*เส้นรับรับงานเช่น {
+  "delivery_id": 2,
+  "rider_id": 1
+}*/
 
 app.post("/deliveries/accept", async (req, res) => {
   try {
-    const { delivery_id, rider_id, picture_status2 } = req.body ?? {};
+    const { delivery_id, rider_id } = req.body ?? {};
 
     if (!delivery_id || !rider_id || !picture_status2)
       return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
-
-    // ตรวจว่า delivery มีอยู่จริง
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
     const deliveryDoc = await deliveryRef.get();
     if (!deliveryDoc.exists)
@@ -654,7 +639,6 @@ app.post("/deliveries/accept", async (req, res) => {
     if (deliveryData.status !== "waiting")
       return res.status(400).json({ error: "Delivery already accepted or in progress" });
 
-    // สร้าง assignment ใหม่
     const assiIdNum = await nextId("assi_seq");
     const assiId = String(assiIdNum);
 
@@ -662,8 +646,8 @@ app.post("/deliveries/accept", async (req, res) => {
       assi_id: assiIdNum,
       delivery_id: Number(delivery_id),
       rider_id: Number(rider_id),
-      picture_status2: picture_status2 || null, // รูปตอนรับของ
-      picture_status3: null, // ยังไม่ส่งของ
+      picture_status2: picture_status2 || null, 
+      picture_status3: null,
       status: "accept",
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -671,7 +655,6 @@ app.post("/deliveries/accept", async (req, res) => {
 
     await db.collection(ASSIGN_COL).doc(assiId).set(payload);
 
-    // อัปเดต status ของ delivery ด้วย
     await deliveryRef.update({
       status: "accept",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -683,7 +666,70 @@ app.post("/deliveries/accept", async (req, res) => {
   }
 });
 
-//อัพเดทสถานะตอนส่งเสร็จ
+/*เส้นรับรับงานเมื่อถึงบ้านของผู้สร้าง Delivery เช่น {
+  "delivery_id": 2,
+  "rider_id": 1,
+  "picture_status2": "https://img2.pic.in.th/pic/unnamed93efa3c44bc1b5ab.jpg"
+}*/
+app.post("/deliveries/update-status-accept", async (req, res) => {
+  try {
+    const { delivery_id, rider_id, picture_status2 } = req.body ?? {};
+
+    if (!delivery_id || !rider_id || !picture_status2)
+      return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
+    const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
+    const deliveryDoc = await deliveryRef.get();
+    if (!deliveryDoc.exists)
+      return res.status(404).json({ error: "delivery not found" });
+
+    const deliveryData = deliveryDoc.data();
+    if (deliveryData.status !== "waiting")
+      return res.status(400).json({ error: "Delivery already accepted or in progress" });
+
+    const assiIdNum = await nextId("assi_seq");
+    const assiId = String(assiIdNum);
+
+    const payload = {
+      assi_id: assiIdNum,
+      delivery_id: Number(delivery_id),
+      rider_id: Number(rider_id),
+      picture_status2: picture_status2 || null, 
+      picture_status3: null,
+      status: "accept",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await db.collection(ASSIGN_COL).doc(assiId).set(payload);
+
+    await deliveryRef.update({
+      status: "accept",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return res.json({ ok: true, message: "Delivery assigned successfully", assignment: payload });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+//======อัพเดทสถานะตอนส่งเสร็จ======
+/*
+ส่งเป็น สองอัน
+
+1. อัพเดทสถานะว่ากำลังเดินทาง {
+  "assi_id": 1,
+  "status": "transporting"
+}
+
+2. อัพเดทสถานะว่าส่งเสร็จแล้ว
+{
+  "assi_id": 1,
+  "status": "finish",
+  "picture_status3": "https://res.cloudinary.com/demo/image/upload/v1739134000/delivered_package.jpg"
+}
+*/
 app.post("/deliveries/update-status", async (req, res) => {
   try {
     const { assi_id, status, picture_status3 } = req.body ?? {};
@@ -719,35 +765,6 @@ app.post("/deliveries/update-status", async (req, res) => {
     return res.json({ ok: true, message: `Status updated to ${status}` });
   } catch (e) {
     return res.status(500).json({ error: e.message });
-  }
-});
-
-
-app.post("/deliveries/finish", async (req, res) => {
-  try {
-    const { delivery_id, picture_status2 } = req.body;
-
-    if (!delivery_id || !picture_status2) {
-      return res.status(400).json({ error: "delivery_id and picture_status2 are required" });
-    }
-
-    const docRef = db.collection("delivery").doc(String(delivery_id));
-    const doc = await docRef.get();
-    if (!doc.exists) return res.status(404).json({ error: "delivery not found" });
-
-    if (doc.data().status !== "accept" && doc.data().status !== "transporting") {
-      return res.status(400).json({ error: "Invalid status transition" });
-    }
-
-    await docRef.update({
-      status: "finish",
-      picture_status2,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    res.json({ ok: true, message: "Delivery finished successfully" });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
   }
 });
 
