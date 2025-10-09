@@ -194,6 +194,15 @@ app.post("/register/rider", async (req, res) => {
     const rider_car = await createRiderCar({ user_id: user.id, image_car, plate_number, car_type });
     return res.status(201).json({ user, rider_car });
   } catch (e) {
+
+
+
+
+
+
+
+
+    
     return res.status(e.code || 400).json({ error: e.message, ...(e.payload || {}) });
   }
 });
@@ -567,16 +576,8 @@ app.post("/delivery/delete", async (req, res) => {
   }
 });
 
-app.get("/deliveries/waiting", async (req, res) => {
-  try {
-    const snapshot = await db.collection("delivery").where("status", "==", "waiting").get();
-    const deliveries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json(deliveries);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
+//==========================================================================================================
 app.get("/deliveries/waiting", async (req, res) => {
   try {
     const snapshot = await db.collection("delivery").where("status", "==", "waiting").get();
