@@ -562,6 +562,17 @@ app.post("/delivery/delete", async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
+
+app.get("/deliveries/pending", async (req, res) => {
+  try {
+    const snapshot = await db.collection("delivery").where("status", "==", "pending").get();
+    const deliveries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json(deliveries);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
