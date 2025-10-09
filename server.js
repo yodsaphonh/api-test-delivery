@@ -589,7 +589,7 @@ app.get("/deliveries/waiting", async (req, res) => {
     for (const doc of snapshot.docs) {
       const data = doc.data();
 
-      // 🔹 ดึง address sender
+      // 🔹 ดึง address sender Test
       let addressSender = null;
       if (data.address_id_sender) {
         const senderDoc = await db
