@@ -563,9 +563,9 @@ app.post("/delivery/delete", async (req, res) => {
   }
 });
 
-app.get("/deliveries/pending", async (req, res) => {
+app.get("/deliveries/waiting", async (req, res) => {
   try {
-    const snapshot = await db.collection("delivery").where("status", "==", "pending").get();
+    const snapshot = await db.collection("delivery").where("status", "==", "waiting").get();
     const deliveries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.json(deliveries);
   } catch (e) {
