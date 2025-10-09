@@ -34,7 +34,7 @@ const ADDR_COL  = "user_address";  // address_id, user_id, address, lat, lng
 const RIDER_COL = "rider_car";     // rider_id, user_id, image_car, plate_number, car_type
 const COUNTERS  = "_counters";     // seq storage
 const DELIVERY_COL = "delivery";   // delivery_id, user_id_sender, user_id_receiver, ...
-
+const ASSIGN_COL = "delivery_assignment"; // assi_id, delivery_id, rider_id, picture_status2, picture_status3, status
 /* --------------------------------- Healthcheck -------------------------------- */
 app.get("/", (_, res) => res.send("API on Render 🚀"));
 app.get("/users/:id", async (req, res) => {
@@ -639,35 +639,89 @@ app.get("/delivery/:id", async (req, res) => {
 
 app.post("/deliveries/accept", async (req, res) => {
   try {
-    const { delivery_id, rider_id, picture_status1 } = req.body;
+    const { delivery_id, rider_id, picture_status2 } = req.body ?? {};
 
-    if (!delivery_id || !rider_id || !picture_status1) {
-      return res.status(400).json({ error: "delivery_id, rider_id, picture_status1 are required" });
-    }
+    if (!delivery_id || !rider_id || !picture_status2)
+      return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
 
-    const docRef = db.collection("delivery").doc(String(delivery_id));
-    const doc = await docRef.get();
-    if (!doc.exists) {
+    // ตรวจว่า delivery มีอยู่จริง
+    const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
+    const deliveryDoc = await deliveryRef.get();
+    if (!deliveryDoc.exists)
       return res.status(404).json({ error: "delivery not found" });
-    }
 
-    // อัปเดตได้เฉพาะสถานะ waiting
-    if (doc.data().status !== "waiting") {
-      return res.status(400).json({ error: "Delivery already accepted or finished" });
-    }
+    const deliveryData = deliveryDoc.data();
+    if (deliveryData.status !== "waiting")
+      return res.status(400).json({ error: "Delivery already accepted or in progress" });
 
-    await docRef.update({
+    // สร้าง assignment ใหม่
+    const assiIdNum = await nextId("assi_seq");
+    const assiId = String(assiIdNum);
+
+    const payload = {
+      assi_id: assiIdNum,
+      delivery_id: Number(delivery_id),
+      rider_id: Number(rider_id),
+      picture_status2: picture_status2 || null, // รูปตอนรับของ
+      picture_status3: null, // ยังไม่ส่งของ
       status: "accept",
-      rider_id,
-      picture_status1,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await db.collection(ASSIGN_COL).doc(assiId).set(payload);
+
+    // อัปเดต status ของ delivery ด้วย
+    await deliveryRef.update({
+      status: "accept",
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    res.json({ ok: true, message: "Delivery accepted" });
+    return res.json({ ok: true, message: "Delivery assigned successfully", assignment: payload });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message });
   }
 });
+
+//อัพเดทสถานะตอนส่งเสร็จ
+app.post("/deliveries/update-status", async (req, res) => {
+  try {
+    const { assi_id, status, picture_status3 } = req.body ?? {};
+    if (!assi_id || !status)
+      return res.status(400).json({ error: "assi_id and status are required" });
+
+    const assignmentRef = db.collection(ASSIGN_COL).doc(String(assi_id));
+    const assignmentDoc = await assignmentRef.get();
+    if (!assignmentDoc.exists)
+      return res.status(404).json({ error: "assignment not found" });
+
+    const data = assignmentDoc.data();
+    const deliveryRef = db.collection(DELIVERY_COL).doc(String(data.delivery_id));
+
+    // ตรวจว่า delivery ยังอยู่ในระบบ
+    const deliveryDoc = await deliveryRef.get();
+    if (!deliveryDoc.exists)
+      return res.status(404).json({ error: "delivery not found" });
+
+    // อัปเดต assignment
+    const updates = { status, updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (status === "finish" && picture_status3)
+      updates.picture_status3 = picture_status3;
+
+    await assignmentRef.update(updates);
+
+    // sync delivery.status
+    await deliveryRef.update({
+      status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return res.json({ ok: true, message: `Status updated to ${status}` });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 
 app.post("/deliveries/finish", async (req, res) => {
   try {
