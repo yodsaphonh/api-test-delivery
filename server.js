@@ -577,6 +577,57 @@ app.get("/deliveries/waiting", async (req, res) => {
   }
 });
 
+app.get("/deliveries/waiting", async (req, res) => {
+  try {
+    const snapshot = await db
+      .collection("delivery")
+      .where("status", "==", "waiting")
+      .get();
+
+    const deliveries = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+
+      // 🔹 ดึง address sender
+      let addressSender = null;
+      if (data.address_id_sender) {
+        const senderDoc = await db
+          .collection("user_address")
+          .doc(String(data.address_id_sender))
+          .get();
+        if (senderDoc.exists) {
+          addressSender = senderDoc.data();
+        }
+      }
+
+      // 🔹 ดึง address receiver
+      let addressReceiver = null;
+      if (data.address_id_receiver) {
+        const receiverDoc = await db
+          .collection("user_address")
+          .doc(String(data.address_id_receiver))
+          .get();
+        if (receiverDoc.exists) {
+          addressReceiver = receiverDoc.data();
+        }
+      }
+
+      deliveries.push({
+        id: doc.id,
+        ...data,
+        address_sender: addressSender,
+        address_receiver: addressReceiver,
+      });
+    }
+
+    res.json(deliveries);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
