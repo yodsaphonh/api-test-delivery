@@ -628,7 +628,7 @@ app.post("/deliveries/accept", async (req, res) => {
   try {
     const { delivery_id, rider_id } = req.body ?? {};
 
-    if (!delivery_id || !rider_id || !picture_status2)
+    if (!delivery_id || !rider_id)
       return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
     const deliveryDoc = await deliveryRef.get();
