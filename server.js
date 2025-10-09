@@ -635,6 +635,68 @@ app.get("/delivery/:id", async (req, res) => {
   }
 });
 
+
+
+app.post("/deliveries/accept", async (req, res) => {
+  try {
+    const { delivery_id, rider_id, picture_status1 } = req.body;
+
+    if (!delivery_id || !rider_id || !picture_status1) {
+      return res.status(400).json({ error: "delivery_id, rider_id, picture_status1 are required" });
+    }
+
+    const docRef = db.collection("delivery").doc(String(delivery_id));
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: "delivery not found" });
+    }
+
+    // อัปเดตได้เฉพาะสถานะ waiting
+    if (doc.data().status !== "waiting") {
+      return res.status(400).json({ error: "Delivery already accepted or finished" });
+    }
+
+    await docRef.update({
+      status: "accept",
+      rider_id,
+      picture_status1,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.json({ ok: true, message: "Delivery accepted" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/deliveries/finish", async (req, res) => {
+  try {
+    const { delivery_id, picture_status2 } = req.body;
+
+    if (!delivery_id || !picture_status2) {
+      return res.status(400).json({ error: "delivery_id and picture_status2 are required" });
+    }
+
+    const docRef = db.collection("delivery").doc(String(delivery_id));
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: "delivery not found" });
+
+    if (doc.data().status !== "accept" && doc.data().status !== "transporting") {
+      return res.status(400).json({ error: "Invalid status transition" });
+    }
+
+    await docRef.update({
+      status: "finish",
+      picture_status2,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.json({ ok: true, message: "Delivery finished successfully" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
