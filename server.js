@@ -551,114 +551,51 @@ app.get("/delivery/:id", async (req, res) => {
   }
 });
 
-
-
-/*เส้นรับรับงาน เช่น rider ลังนอนตีลังกาอยู่ {
-  "delivery_id": 2,
-  "rider_id": 1
-}*/
-
+/* ========================= เส้นรับงาน + บันทึกพิกัดแรก =========================
+   POST /deliveries/accept
+   body: { delivery_id:number, rider_id:number, rider_lat:number, rider_lng:number }
+=============================================================================== */
 app.post("/deliveries/accept", async (req, res) => {
   try {
-    const { delivery_id, rider_id } = req.body ?? {};
-
+    const { delivery_id, rider_id, rider_lat, rider_lng } = req.body ?? {};
     if (!delivery_id || !rider_id)
-      return res.status(400).json({ error: "delivery_id, rider_id, are required" });
-    const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
-    const deliveryDoc = await deliveryRef.get();
-    if (!deliveryDoc.exists)
-      return res.status(404).json({ error: "delivery not found" });
+      return res.status(400).json({ error: "delivery_id, rider_id are required" });
 
-    const deliveryData = deliveryDoc.data();
-    if (deliveryData.status !== "waiting")
-      return res.status(400).json({ error: "Delivery already accepted or in progress" });
-
-    const assiIdNum = await nextId("assi_seq");
-    const assiId = String(assiIdNum);
-
-    const payload = {
-      assi_id: assiIdNum,
-      delivery_id: Number(delivery_id),
-      rider_id: Number(rider_id),
-      status: "accept",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    await db.collection(ASSIGN_COL).doc(assiId).set(payload);
-
-    await deliveryRef.update({
-      status: "accept",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return res.json({ ok: true, message: "Delivery assigned successfully", assignment: payload });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /deliveries/update-status-accept
-// body: { delivery_id, rider_id, picture_status2, rider_lat, rider_lng }
-app.post("/deliveries/update-status-accept", async (req, res) => {
-  try {
-    const { delivery_id, rider_id, picture_status2, rider_lat, rider_lng } = req.body ?? {};
-    if (!delivery_id || !rider_id || !picture_status2)
-      return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
+    // แนะนำให้อย่างน้อยส่ง lat/lng มาเก็บครั้งแรกด้วย
     if (rider_lat == null || rider_lng == null)
-      return res.status(400).json({ error: "rider_lat, rider_lng are required" });
+      return res.status(400).json({ error: "rider_lat, rider_lng are required on accept" });
 
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
     const riderLocRef = db.collection(RIDER_LOC_COL).doc(String(rider_id));
-
-    // เตรียมเลข assignment ไว้ก่อนเข้า transaction (กัน nested transaction)
-    const preparedAssiIdNum = await nextId("assi_seq");
+    const assiIdNum = await nextId("assi_seq");
+    const assiId = String(assiIdNum);
 
     await db.runTransaction(async (tx) => {
-      // 1) ตรวจ delivery (ห้ามซ้ำ)
+      // ตรวจ delivery ต้องอยู่สถานะ waiting เท่านั้น
       const dSnap = await tx.get(deliveryRef);
       if (!dSnap.exists) throw new Error("delivery not found");
       const d = dSnap.data();
-      if (["transporting", "finish", "cancel"].includes(d.status)) {
-        throw new Error("Delivery already in progress or finished");
-      }
+      if (d.status !== "waiting") throw new Error("Delivery already accepted or in progress");
 
-      // 2) อัปเดต assignment accept -> transporting (หรือสร้างใหม่)
-      const assignQuery = db.collection(ASSIGN_COL)
-        .where("delivery_id", "==", Number(delivery_id))
-        .where("rider_id", "==", Number(rider_id))
-        .limit(1);
-      const assignQSnap = await tx.get(assignQuery);
-
-      if (!assignQSnap.empty) {
-        const aDoc = assignQSnap.docs[0];
-        const a = aDoc.data();
-        if (a.status !== "accept") throw new Error("Assignment isn't in 'accept' state");
-        tx.update(aDoc.ref, {
-          status: "transporting",
-          picture_status2: picture_status2 || a.picture_status2 || null,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      } else {
-        tx.set(db.collection(ASSIGN_COL).doc(String(preparedAssiIdNum)), {
-          assi_id: preparedAssiIdNum,
-          delivery_id: Number(delivery_id),
-          rider_id: Number(rider_id),
-          picture_status2: picture_status2 || null,
-          picture_status3: null,
-          status: "transporting",
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      // 3) อัปเดต delivery -> transporting
-      tx.update(deliveryRef, {
-        status: "transporting",
+      // สร้าง assignment = accept
+      tx.set(db.collection(ASSIGN_COL).doc(assiId), {
+        assi_id: assiIdNum,
+        delivery_id: Number(delivery_id),
+        rider_id: Number(rider_id),
+        status: "accept",
+        picture_status2: null,
+        picture_status3: null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // 4) สร้าง/อัปเดต rider_location พร้อม rider_location_id = docId (เขียนพิกัดแรกทันที)
+      // อัปเดต delivery -> accept
+      tx.update(deliveryRef, {
+        status: "accept",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // สร้าง/อัปเดตตำแหน่งแรกของ Rider (ใช้ rider_id เป็น docId)
       tx.set(
         riderLocRef,
         {
@@ -675,7 +612,90 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
 
     return res.json({
       ok: true,
-      message: "transporting + rider_location created",
+      message: "Delivery accepted and rider_location saved",
+      assignment: {
+        assi_id: assiIdNum,
+        delivery_id: Number(delivery_id),
+        rider_id: Number(rider_id),
+        status: "accept",
+      },
+      rider_location: {
+        rider_location_id: String(rider_id),
+        lat: Number(rider_lat),
+        lng: Number(rider_lng),
+      },
+    });
+  } catch (e) {
+    const msg = e.message || "internal error";
+    const code = /not found|required|progress/i.test(msg) ? 400 : 500;
+    return res.status(code).json({ error: msg });
+  }
+});
+
+
+/* =================== อัปเดตเป็น transporting + อัปเดตพิกัด ====================
+   POST /deliveries/update-status-accept
+   body: { delivery_id:number, rider_id:number, picture_status2:string, rider_lat:number, rider_lng:number }
+=============================================================================== */
+app.post("/deliveries/update-status-accept", async (req, res) => {
+  try {
+    const { delivery_id, rider_id, picture_status2, rider_lat, rider_lng } = req.body ?? {};
+    if (!delivery_id || !rider_id || !picture_status2)
+      return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
+    if (rider_lat == null || rider_lng == null)
+      return res.status(400).json({ error: "rider_lat, rider_lng are required" });
+
+    const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
+    const riderLocRef  = db.collection(RIDER_LOC_COL).doc(String(rider_id));
+
+    await db.runTransaction(async (tx) => {
+      // ตรวจ delivery
+      const dSnap = await tx.get(deliveryRef);
+      if (!dSnap.exists) throw new Error("delivery not found");
+
+      // หา assignment ของคู่นี้ที่ status = accept
+      const q = db.collection(ASSIGN_COL)
+        .where("delivery_id", "==", Number(delivery_id))
+        .where("rider_id", "==", Number(rider_id))
+        .limit(1);
+
+      const aSnap = await tx.get(q);
+      if (aSnap.empty) throw new Error("assignment not found for this delivery/rider");
+      const aDoc = aSnap.docs[0];
+      const a = aDoc.data();
+      if (a.status !== "accept")
+        throw new Error("Assignment must be in 'accept' to set transporting");
+
+      // เปลี่ยน assignment -> transporting + แนบรูป
+      tx.update(aDoc.ref, {
+        status: "transporting",
+        picture_status2: picture_status2 || a.picture_status2 || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // เปลี่ยน delivery -> transporting
+      tx.update(deliveryRef, {
+        status: "transporting",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // อัปเดตพิกัดล่าสุดของ rider (เหมือนเส้น /rider/location/update)
+      tx.set(
+        riderLocRef,
+        {
+          rider_location_id: String(rider_id),
+          user_id: String(rider_id),
+          lat: Number(rider_lat),
+          lng: Number(rider_lng),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+
+    return res.json({
+      ok: true,
+      message: "Assignment moved to transporting and rider location updated",
       delivery_id: Number(delivery_id),
       rider_id: Number(rider_id),
       rider_location: {
@@ -685,7 +705,9 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
       },
     });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    const msg = e.message || "internal error";
+    const code = /not found|accept|required/i.test(msg) ? 400 : 500;
+    return res.status(code).json({ error: msg });
   }
 });
 
