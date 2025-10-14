@@ -782,40 +782,46 @@ app.get("/riders/overview/:riderId", async (req, res) => {
 
 
 // POST /deliveries/update-status-finish
-// body: { assi_id, picture_status3, rider_id? }  // rider_id เป็น optional สำหรับยืนยันสิทธิ์
+// body: { delivery_id, picture_status3?, rider_id? }
 app.post("/deliveries/update-status-finish", async (req, res) => {
   try {
-    const { assi_id, picture_status3, rider_id } = req.body ?? {};
+    const { delivery_id, picture_status3, rider_id } = req.body ?? {};
     const status = "finish";
-    if (!assi_id) return res.status(400).json({ error: "assi_id is required" });
+    if (!delivery_id) return res.status(400).json({ error: "delivery_id is required" });
 
-    const assignmentRef = db.collection(ASSIGN_COL).doc(String(assi_id));
-    const assignmentDoc = await assignmentRef.get();
-    if (!assignmentDoc.exists) return res.status(404).json({ error: "assignment not found" });
+    // หา assignment ของ delivery นี้ (จะเลือกตัวที่กำลัง transporting เท่านั้น)
+    const assignSnap = await db
+      .collection(ASSIGN_COL)
+      .where("delivery_id", "==", Number(delivery_id))
+      .get();
 
-    const a = assignmentDoc.data();
+    if (assignSnap.empty) return res.status(404).json({ error: "assignment for this delivery not found" });
 
-    // (แนะนำ) ถ้าส่ง rider_id มาก็ตรวจให้ตรง
+    // พยายามเลือกตัวที่ status = transporting
+    const aDoc = assignSnap.docs.find(d => (d.data()?.status === "transporting"));
+    if (!aDoc) return res.status(400).json({ error: "No assignment in 'transporting' for this delivery" });
+
+    const a = aDoc.data();
+
+    // (ออปชัน) ตรวจสิทธิ์ rider
     if (rider_id != null && Number(rider_id) !== Number(a.rider_id)) {
       return res.status(403).json({ error: "rider_id does not match assignment" });
     }
 
-    // กันการเปลี่ยนสถานะผิดลำดับ / ยิงซ้ำ
-    if (a.status !== "transporting") {
-      return res.status(400).json({ error: "Assignment must be in 'transporting' to finish" });
-    }
-
+    // ตรวจว่ามี delivery จริง
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(a.delivery_id));
     const deliveryDoc = await deliveryRef.get();
     if (!deliveryDoc.exists) return res.status(404).json({ error: "delivery not found" });
 
+    // อัปเดต assignment -> finish (แนบรูปถ้ามี)
     const updates = {
       status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       ...(picture_status3 ? { picture_status3 } : {}),
     };
+    await aDoc.ref.update(updates);
 
-    await assignmentRef.update(updates);
+    // sync delivery.status -> finish
     await deliveryRef.update({
       status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -825,6 +831,7 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
       ok: true,
       message: `Status updated to ${status}`,
       delivery_id: a.delivery_id,
+      assi_id: a.assi_id,
       rider_id: a.rider_id,
     });
   } catch (e) {
