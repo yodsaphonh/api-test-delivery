@@ -745,57 +745,80 @@ app.post("/rider/location/update", async (req, res) => {
 });
 
 // GET /riders/overview/:riderId
-// res: { rider_id, rider_lat, rider_lng, receiver_lat, receiver_lng, delivery_id }
+// -> { rider_lat, rider_lng, receiver_lat, receiver_lng, delivery_id }
 app.get("/riders/overview/:riderId", async (req, res) => {
   try {
-    const riderId = Number(req.params.riderId);
+    const riderIdStr = String(req.params.riderId);
+    const riderIdNum = Number(riderIdStr);
 
-    // 1) ตำแหน่งไรเดอร์
-    const locSnap = await db.collection("rider_location").doc(String(riderId)).get();
-    if (!locSnap.exists) return res.status(404).json({ error: "rider location not found" });
+    // 1) ตำแหน่งล่าสุดของไรเดอร์
+    const locSnap = await db.collection(RIDER_LOC_COL).doc(riderIdStr).get();
+    if (!locSnap.exists) {
+      return res.status(404).json({ error: "rider location not found" });
+    }
     const loc = locSnap.data();
     const rider_lat = loc.lat == null ? null : Number(loc.lat);
     const rider_lng = loc.lng == null ? null : Number(loc.lng);
 
-    // 2) หา assignment ล่าสุดของไรเดอร์ที่ยังไม่จบงาน (transporting > accept)
-    const asgSnap = await db.collection("delivery_assignment")
-      .where("rider_id", "==", riderId)
-      .orderBy("assi_id", "desc")
-      .limit(5)
+    // 2) หา assignment ล่าสุดของไรเดอร์ (เลี่ยง orderBy เพื่อไม่ต้องใช้ index)
+    const aSnap = await db.collection(ASSIGN_COL)
+      .where("rider_id", "==", riderIdNum)
       .get();
 
-    let delivery_id = null, receiver_lat = null, receiver_lng = null;
-    for (const d of asgSnap.docs) {
+    // กรองให้เหลือเฉพาะสถานะที่ยังทำงานอยู่ แล้วเลือกอัน "ใหม่สุด" ตาม assi_id
+    let latest = null;
+    aSnap.forEach(d => {
       const a = d.data();
-      if (["transporting","accept"].includes(a.status)) {
-        delivery_id = Number(a.delivery_id);
-        break;
+      if (["accept", "transporting"].includes(String(a.status))) {
+        if (!latest || Number(a.assi_id || 0) > Number(latest.assi_id || 0)) {
+          latest = a;
+        }
       }
+    });
+
+    if (!latest) {
+      // ไม่มีงานค้าง ส่งพิกัดไรเดอร์ แต่ delivery/receiver เป็น null
+      return res.json({
+        rider_lat, rider_lng,
+        receiver_lat: null, receiver_lng: null,
+        delivery_id: null,
+        updatedAt: loc.updatedAt || null,
+      });
     }
 
-    if (delivery_id != null) {
-      const delDoc = await db.collection("delivery").doc(String(delivery_id)).get();
-      if (delDoc.exists) {
-        const del = delDoc.data();
-        const addrId = del.address_id_receiver != null ? String(del.address_id_receiver) : null;
-        if (addrId) {
-          const addrDoc = await db.collection("user_address").doc(addrId).get();
-          if (addrDoc.exists) {
-            const a = addrDoc.data();
-            receiver_lat = a.lat == null ? null : Number(a.lat);
-            receiver_lng = a.lng == null ? null : Number(a.lng);
-          }
-        }
+    // 3) อ่าน delivery เพื่อเอา address_id_receiver
+    const deliveryId = Number(latest.delivery_id);
+    const dSnap = await db.collection(DELIVERY_COL).doc(String(deliveryId)).get();
+    if (!dSnap.exists) {
+      return res.json({
+        rider_lat, rider_lng,
+        receiver_lat: null, receiver_lng: null,
+        delivery_id: deliveryId,
+        updatedAt: loc.updatedAt || null,
+      });
+    }
+
+    const d = dSnap.data();
+    const addrRecvId = d.address_id_receiver != null ? String(d.address_id_receiver) : null;
+
+    // 4) อ่านพิกัดผู้รับจาก user_address
+    let receiver_lat = null, receiver_lng = null;
+    if (addrRecvId) {
+      const addrSnap = await db.collection(ADDR_COL).doc(addrRecvId).get();
+      if (addrSnap.exists) {
+        const a = addrSnap.data();
+        receiver_lat = a.lat == null ? null : Number(a.lat);
+        receiver_lng = a.lng == null ? null : Number(a.lng);
       }
     }
 
     return res.json({
-      rider_id: String(riderId),
       rider_lat, rider_lng,
       receiver_lat, receiver_lng,
-      delivery_id,
+      delivery_id: deliveryId,
       updatedAt: loc.updatedAt || null,
     });
+
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
