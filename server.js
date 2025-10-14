@@ -726,52 +726,51 @@ app.post("/rider/location/update", async (req, res) => {
 // res: { rider_id, rider_lat, rider_lng, receiver_lat, receiver_lng, delivery_id }
 app.get("/riders/overview/:riderId", async (req, res) => {
   try {
-    const riderId = String(req.params.riderId);
+    const riderId = Number(req.params.riderId);
 
     // 1) ตำแหน่งไรเดอร์
-    const locSnap = await db.collection(RIDER_LOC_COL).doc(riderId).get();
+    const locSnap = await db.collection("rider_location").doc(String(riderId)).get();
     if (!locSnap.exists) return res.status(404).json({ error: "rider location not found" });
     const loc = locSnap.data();
-    const rider_lat = (loc.lat == null) ? null : Number(loc.lat);
-    const rider_lng = (loc.lng == null) ? null : Number(loc.lng);
+    const rider_lat = loc.lat == null ? null : Number(loc.lat);
+    const rider_lng = loc.lng == null ? null : Number(loc.lng);
 
-    // 2) หา delivery ล่าสุดที่ user_id_sender == riderId
-    let receiver_lat = null, receiver_lng = null, delivery_id = null;
+    // 2) หา assignment ล่าสุดของไรเดอร์ที่ยังไม่จบงาน (transporting > accept)
+    const asgSnap = await db.collection("delivery_assignment")
+      .where("rider_id", "==", riderId)
+      .orderBy("assi_id", "desc")
+      .limit(5)
+      .get();
 
-    let deliveryQ = await db
-      .collection(DELIVERY_COL)
-      .where("user_id_sender", "==", Number(riderId))
-      .orderBy("delivery_id", "desc")
-      .limit(1)
-      .get()
-      .catch(async () => {
-        return await db.collection(DELIVERY_COL)
-          .where("user_id_sender", "==", Number(riderId))
-          .limit(1)
-          .get();
-      });
+    let delivery_id = null, receiver_lat = null, receiver_lng = null;
+    for (const d of asgSnap.docs) {
+      const a = d.data();
+      if (["transporting","accept"].includes(a.status)) {
+        delivery_id = Number(a.delivery_id);
+        break;
+      }
+    }
 
-    if (!deliveryQ.empty) {
-      const d = deliveryQ.docs[0].data();
-      delivery_id = Number(d.delivery_id ?? null);
-
-      const addrIdSender = d.address_id_sender != null ? String(d.address_id_sender) : null;
-      if (addrIdSender) {
-        const addrSnap = await db.collection(ADDR_COL).doc(addrIdSender).get();
-        if (addrSnap.exists) {
-          const a = addrSnap.data();
-          receiver_lat = (a.lat == null) ? null : Number(a.lat);
-          receiver_lng = (a.lng == null) ? null : Number(a.lng);
+    if (delivery_id != null) {
+      const delDoc = await db.collection("delivery").doc(String(delivery_id)).get();
+      if (delDoc.exists) {
+        const del = delDoc.data();
+        const addrId = del.address_id_receiver != null ? String(del.address_id_receiver) : null;
+        if (addrId) {
+          const addrDoc = await db.collection("user_address").doc(addrId).get();
+          if (addrDoc.exists) {
+            const a = addrDoc.data();
+            receiver_lat = a.lat == null ? null : Number(a.lat);
+            receiver_lng = a.lng == null ? null : Number(a.lng);
+          }
         }
       }
     }
 
     return res.json({
-      rider_id: riderId,
-      rider_lat,
-      rider_lng,
-      receiver_lat,
-      receiver_lng,
+      rider_id: String(riderId),
+      rider_lat, rider_lng,
+      receiver_lat, receiver_lng,
       delivery_id,
       updatedAt: loc.updatedAt || null,
     });
@@ -839,6 +838,29 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
   }
 });
 
+
+app.get("/riders/car/:riderId", async (req, res) => {
+  try {
+    const riderId = String(req.params.riderId);
+
+    // 1) ลองอ่านด้วย docId ก่อน (ปกติเราตั้ง docId = rider_id)
+    const doc = await db.collection("rider_car").doc(riderId).get();
+    if (doc.exists) return res.json({ id: doc.id, ...doc.data() });
+
+    // 2) เผื่อบางอัน docId ไม่ตรง ค้นด้วยฟิลด์ rider_id แทน
+    const q = await db.collection("rider_car")
+      .where("rider_id", "==", Number(riderId))
+      .limit(1)
+      .get();
+
+    if (q.empty) return res.status(404).json({ error: "rider_car not found" });
+
+    const d = q.docs[0];
+    return res.json({ id: d.id, ...d.data() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
