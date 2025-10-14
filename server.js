@@ -34,6 +34,7 @@ const ADDR_COL  = "user_address";  // address_id, user_id, address, lat, lng
 const RIDER_COL = "rider_car";     // rider_id, user_id, image_car, plate_number, car_type
 const COUNTERS  = "_counters";     // seq storage
 const DELIVERY_COL = "delivery";   // delivery_id, user_id_sender, user_id_receiver, ...
+const RIDER_LOC_COL = "rider_location";
 const ASSIGN_COL = "delivery_assignment"; // assi_id, delivery_id, rider_id, picture_status2, picture_status3, status
 /* --------------------------------- Healthcheck -------------------------------- */
 app.get("/", (_, res) => res.send("API on Render 🚀"));
@@ -499,71 +500,6 @@ app.post("/delivery/list-by-user", async (req, res) => {
   }
 });
 
-/* ----------------------- 5. Get Delivery Detail -----------------------
-GET /delivery/detail/:id
------------------------------------------------------------------- */
-app.get("/delivery/detail/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    if (!id) return res.status(400).json({ error: "delivery_id required" });
-
-    const doc = await db.collection(DELIVERY_COL).doc(String(id)).get();
-    if (!doc.exists) return res.status(404).json({ error: "not found" });
-
-    return res.json({ id: doc.id, ...doc.data() });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-
-/* ----------------------- 6. Update Delivery Status -----------------------
-POST /delivery/update-status
-body: { delivery_id: 1, status: "accepted" }
------------------------------------------------------------------- */
-app.post("/delivery/update-status", async (req, res) => {
-  try {
-    const { delivery_id, status } = req.body ?? {};
-    if (!delivery_id || !status)
-      return res.status(400).json({ error: "delivery_id and status are required" });
-
-    const docRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
-    const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: "delivery not found" });
-
-    await docRef.update({
-      status: String(status),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return res.json({ ok: true, message: "status updated" });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-
-/* ----------------------- 7. Delete Delivery -----------------------
-POST /delivery/delete
-body: { delivery_id: 1 }
------------------------------------------------------------------- */
-app.post("/delivery/delete", async (req, res) => {
-  try {
-    const { delivery_id } = req.body ?? {};
-    if (!delivery_id) return res.status(400).json({ error: "delivery_id required" });
-
-    const docRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
-    const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: "delivery not found" });
-
-    await docRef.delete();
-    return res.json({ ok: true, message: `delivery_id ${delivery_id} deleted successfully` });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
-
-
 //==========================================================================================================
 app.get("/deliveries/waiting", async (req, res) => {
   try {
@@ -619,7 +555,7 @@ app.get("/delivery/:id", async (req, res) => {
 });
 
 
-/*เส้นรับรับงานเช่น {
+/*เส้นรับรับงาน เช่น rider ลังนอนตีลังกาอยู่ {
   "delivery_id": 2,
   "rider_id": 1
 }*/
@@ -664,53 +600,243 @@ app.post("/deliveries/accept", async (req, res) => {
   }
 });
 
-/*เส้นรับรับงานเมื่อถึงบ้านของผู้สร้าง Delivery เช่น {
-  "delivery_id": 2,
-  "rider_id": 1,
-  "picture_status2": "https://img2.pic.in.th/pic/unnamed93efa3c44bc1b5ab.jpg"
-}*/
+/* =====================================================================
+   POST /deliveries/update-status-accept
+   Body: { delivery_id, rider_id, picture_status2, lat, lng, address_id }
+   Steps:
+     1) Validate + check delivery
+     2) Create assignment (status: accept)
+     3) Update delivery status -> accept
+     4) Update user_address/{address_id} with {lat,lng}
+     5) Upsert rider_location/{rider_id} with {lat,lng,user_id=rider_id,address_id}
+===================================================================== */
 app.post("/deliveries/update-status-accept", async (req, res) => {
   try {
-    const { delivery_id, rider_id, picture_status2 } = req.body ?? {};
+    const { delivery_id, rider_id, picture_status2, lat, lng, address_id } = req.body ?? {};
 
-    if (!delivery_id || !rider_id || !picture_status2)
+    if (!delivery_id || !rider_id || !picture_status2) {
       return res.status(400).json({ error: "delivery_id, rider_id, picture_status2 are required" });
+    }
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: "lat, lng are required" });
+    }
+    if (!address_id) {
+      return res.status(400).json({ error: "address_id is required" });
+    }
+
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
-    const deliveryDoc = await deliveryRef.get();
-    if (!deliveryDoc.exists)
-      return res.status(404).json({ error: "delivery not found" });
+    const assignIdNum = await nextId("assi_seq");
+    const assignId = String(assignIdNum);
 
-    const deliveryData = deliveryDoc.data();
-    if (deliveryData.status !== "accept")
-      return res.status(400).json({ error: "Delivery already accepted or in progress" });
+    const addrRef = db.collection(ADDRESS_COL).doc(String(address_id));
+    const riderLocRef = db.collection(RIDER_LOC_COL).doc(String(rider_id));
+    const assignRef = db.collection(ASSIGN_COL).doc(assignId);
 
-    const assiIdNum = await nextId("assi_seq");
-    const assiId = String(assiIdNum);
+    await db.runTransaction(async (tx) => {
+      const deliverySnap = await tx.get(deliveryRef);
+      if (!deliverySnap.exists) throw new Error("delivery not found");
 
-    const payload = {
-      assi_id: assiIdNum,
-      delivery_id: Number(delivery_id),
-      rider_id: Number(rider_id),
-      picture_status2: picture_status2 || null, 
-      picture_status3: null,
-      status: "accept",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+      const d = deliverySnap.data();
+      if (d.status !== "accept") {
+        // ถ้าต้องการให้เปลี่ยนเฉพาะจาก waiting -> accept ให้แก้ไขเช็คตรงนี้
+        throw new Error("Delivery already accepted or in progress");
+      }
 
-    await db.collection(ASSIGN_COL).doc(assiId).set(payload);
+      // 2) assignment
+      const assignment = {
+        assi_id: assignIdNum,
+        delivery_id: toNum(delivery_id),
+        rider_id: toNum(rider_id), // = user_id
+        picture_status2: picture_status2 || null,
+        picture_status3: null,
+        status: "accept",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      tx.set(assignRef, assignment);
 
-    await deliveryRef.update({
-      status: "accept",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // 3) update delivery
+      tx.update(deliveryRef, {
+        status: "accept",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // 4) update user_address
+      tx.set(
+        addrRef,
+        {
+          user_id: toNum(rider_id),        // owner = rider_id
+          address_id: toNum(address_id),
+          lat: toNum(lat),
+          lng: toNum(lng),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // 5) upsert rider_location
+      tx.set(
+        riderLocRef,
+        {
+          user_id: String(rider_id),       // เก็บซ้ำสำหรับ join
+          address_id: String(address_id),
+          lat: toNum(lat),
+          lng: toNum(lng),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
     });
 
-    return res.json({ ok: true, message: "Delivery assigned successfully", assignment: payload });
+    return res.json({
+      ok: true,
+      message: "Delivery accepted + location updated",
+      assignment_id: assignIdNum,
+      rider_location: {
+        rider_id: toNum(rider_id),
+        address_id: toNum(address_id),
+        lat: toNum(lat),
+        lng: toNum(lng),
+      },
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
+/* =====================================================================
+   POST /rider/location/update
+   - Update rider current location continually (>= 2m change to write)
+   - Body: { rider_id, lat, lng, accuracy?, heading?, speed?, address_id? }
+   NOTE: rider_id == user_id
+===================================================================== */
+app.post("/rider/location/update", async (req, res) => {
+  try {
+    const { rider_id, lat, lng, address_id } = req.body ?? {};
+    if (!rider_id || lat == null || lng == null) {
+      return res.status(400).json({ error: "rider_id, lat, lng are required" });
+    }
+
+    const docRef = db.collection(RIDER_LOC_COL).doc(String(rider_id));
+    const snap = await docRef.get();
+
+    if (snap.exists && snap.data()?.lat != null && snap.data()?.lng != null) {
+      const old = snap.data();
+      const d = haversineMeters(toNum(old.lat), toNum(old.lng), toNum(lat), toNum(lng));
+      if (d < 2) return res.json({ ok: true, skipped: true, reason: "<2m" });
+    }
+
+    await docRef.set(
+      {
+        user_id: String(rider_id),
+        address_id: address_id == null ? undefined : String(address_id),
+        lat: toNum(lat),
+        lng: toNum(lng),
+        accuracy: toNum(accuracy),
+        heading: toNum(heading),
+        speed: toNum(speed),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return res.json({ ok: true, updated: true });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+/* =====================================================================
+   POST /rider/location/update
+   - Update rider current location continually (write only if moved >= 2m)
+   - Body: { rider_id, lat, lng, address_id? }
+   NOTE: rider_id == user_id. (accuracy/heading/speed คำนวณฝั่ง frontend ไม่เก็บที่นี่)
+===================================================================== */
+app.post("/rider/location/update", async (req, res) => {
+  try {
+    const { rider_id, lat, lng, address_id } = req.body ?? {};
+    if (!rider_id || lat == null || lng == null) {
+      return res.status(400).json({ error: "rider_id, lat, lng are required" });
+    }
+
+    const docRef = db.collection(RIDER_LOC_COL).doc(String(rider_id));
+    const snap = await docRef.get();
+
+    // ขยับน้อยกว่า 2 เมตร ไม่เขียนซ้ำ
+    if (snap.exists && snap.data()?.lat != null && snap.data()?.lng != null) {
+      const old = snap.data();
+      const d = haversineMeters(toNum(old.lat), toNum(old.lng), toNum(lat), toNum(lng));
+      if (d < 2) return res.json({ ok: true, skipped: true, reason: "<2m" });
+    }
+
+    await docRef.set(
+      {
+        user_id: String(rider_id),
+        address_id: address_id == null ? undefined : String(address_id),
+        lat: toNum(lat),
+        lng: toNum(lng),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return res.json({ ok: true, updated: true });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/riders/:riderId/overview", async (req, res) => {
+  try {
+    const riderId = String(req.params.riderId);
+
+    const locSnap = await db.collection(RIDER_LOC_COL).doc(riderId).get();
+    if (!locSnap.exists) return res.status(404).json({ error: "rider location not found" });
+    const loc = locSnap.data();
+
+    const userId = riderId; // rider == user
+    const addressId = String(loc.address_id ?? "");
+
+    // user profile
+    let user = null;
+    const u = await db.collection(USER_COL).doc(userId).get();
+    if (u.exists) user = { id: u.id, ...u.data() };
+
+    // rider car (ลอง doc id = riderId ก่อน, ถ้าไม่มีใช้ where user_id)
+    let riderCar = null;
+    const carById = await db.collection(RIDER_CAR_COL).doc(riderId).get();
+    if (carById.exists) {
+      riderCar = { id: carById.id, ...carById.data() };
+    } else {
+      const q = await db.collection(RIDER_CAR_COL).where("user_id", "==", toNum(userId)).limit(1).get();
+      if (!q.empty) {
+        const d = q.docs[0];
+        riderCar = { id: d.id, ...d.data() };
+      }
+    }
+
+    // address
+    let address = null;
+    if (addressId) {
+      const a = await db.collection(ADDRESS_COL).doc(addressId).get();
+      if (a.exists) address = { id: a.id, ...a.data() };
+    }
+
+    return res.json({
+      rider_id: riderId,
+      user,
+      rider_car: riderCar,
+      address,
+      location: {
+        lat: toNum(loc.lat),
+        lng: toNum(loc.lng),
+        updatedAt: loc.updatedAt || null,
+      },
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 //======อัพเดทสถานะตอนส่งเสร็จ======
 /*
