@@ -839,28 +839,25 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
 });
 
 
-app.get("/riders/car/:riderId", async (req, res) => {
+// GET /users/:userId/rider-car  -> หา rider_car ด้วย user_id
+app.get("/users/:userId/rider-car", async (req, res) => {
   try {
-    const riderId = String(req.params.riderId);
+    const userId = Number(req.params.userId);
 
-    // 1) ลองอ่านด้วย docId ก่อน (ปกติเราตั้ง docId = rider_id)
-    const doc = await db.collection("rider_car").doc(riderId).get();
-    if (doc.exists) return res.json({ id: doc.id, ...doc.data() });
-
-    // 2) เผื่อบางอัน docId ไม่ตรง ค้นด้วยฟิลด์ rider_id แทน
-    const q = await db.collection("rider_car")
-      .where("rider_id", "==", Number(riderId))
+    const snap = await db.collection("rider_car")
+      .where("user_id", "==", userId)
       .limit(1)
       .get();
 
-    if (q.empty) return res.status(404).json({ error: "rider_car not found" });
+    if (snap.empty) return res.status(404).json({ error: "rider_car not found" });
 
-    const d = q.docs[0];
+    const d = snap.docs[0];
     return res.json({ id: d.id, ...d.data() });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
