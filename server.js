@@ -648,38 +648,51 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(delivery_id));
     const riderLocRef  = db.collection(RIDER_LOC_COL).doc(String(rider_id));
 
+    // จะเก็บข้อมูลไว้เอาไปตอบหลังจบทรานแซกชัน
+    let deliveryData = null;
+    let assignmentLatest = null;
+    let finalPic2 = null;
+    let assi_id = null;
+
     await db.runTransaction(async (tx) => {
-      // ตรวจ delivery
+      // -------- ตรวจ delivery --------
       const dSnap = await tx.get(deliveryRef);
       if (!dSnap.exists) throw new Error("delivery not found");
+      deliveryData = dSnap.data();
 
-      // หา assignment ของคู่นี้ที่ status = accept
+      // -------- หา assignment ของคู่นี้ (ต้องอยู่สถานะ accept) --------
       const q = db.collection(ASSIGN_COL)
         .where("delivery_id", "==", Number(delivery_id))
         .where("rider_id", "==", Number(rider_id))
         .limit(1);
-
       const aSnap = await tx.get(q);
       if (aSnap.empty) throw new Error("assignment not found for this delivery/rider");
+
       const aDoc = aSnap.docs[0];
       const a = aDoc.data();
-      if (a.status !== "accept")
-        throw new Error("Assignment must be in 'accept' to set transporting");
+      if (a.status !== "accept") throw new Error("Assignment must be in 'accept' to set transporting");
 
-      // เปลี่ยน assignment -> transporting + แนบรูป
+      assi_id = a.assi_id;
+      finalPic2 = picture_status2 || a.picture_status2 || null;
+
+      // -------- อัปเดต assignment -> transporting + แนบรูป --------
       tx.update(aDoc.ref, {
         status: "transporting",
-        picture_status2: picture_status2 || a.picture_status2 || null,
+        picture_status2: finalPic2,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // เปลี่ยน delivery -> transporting
+      // อ่านกลับหลังอัปเดต (โอเคในทรานแซกชันเพราะอ่าน-เขียนบนเอกสารเดียวกัน)
+      const aAfter = await tx.get(aDoc.ref);
+      assignmentLatest = aAfter.data();
+
+      // -------- อัปเดต delivery -> transporting --------
       tx.update(deliveryRef, {
         status: "transporting",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // อัปเดตพิกัดล่าสุดของ rider (เหมือนเส้น /rider/location/update)
+      // -------- บันทึกพิกัดล่าสุดของไรเดอร์ --------
       tx.set(
         riderLocRef,
         {
@@ -693,11 +706,36 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
       );
     });
 
+    // ---------- ตอบกลับพร้อมรูปและรายละเอียดสินค้า ----------
     return res.json({
       ok: true,
       message: "Assignment moved to transporting and rider location updated",
       delivery_id: Number(delivery_id),
+      assi_id,
       rider_id: Number(rider_id),
+
+      proof_images: {
+        picture_status2: finalPic2 ?? null, // รูปตอนรับของ/ขึ้นรถ
+        picture_status3: null               // ยังไม่ถึงขั้นส่งของ
+      },
+
+      product: {
+        name_product: deliveryData?.name_product ?? null,
+        detail_product: deliveryData?.detail_product ?? null,
+        picture_product: deliveryData?.picture_product ?? null,
+        amount: deliveryData?.amount ?? null,
+        phone_receiver: deliveryData?.phone_receiver ?? null,
+      },
+
+      meta: {
+        status_delivery: "transporting",
+        user_id_sender: deliveryData?.user_id_sender ?? null,
+        user_id_receiver: deliveryData?.user_id_receiver ?? null,
+        address_id_sender: deliveryData?.address_id_sender ?? null,
+        address_id_receiver: deliveryData?.address_id_receiver ?? null,
+        assignment_updatedAt: assignmentLatest?.updatedAt ?? null,
+      },
+
       rider_location: {
         rider_location_id: String(rider_id),
         lat: Number(rider_lat),
@@ -710,6 +748,7 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
     return res.status(code).json({ error: msg });
   }
 });
+
 
 
 
@@ -833,37 +872,38 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
     const status = "finish";
     if (!delivery_id) return res.status(400).json({ error: "delivery_id is required" });
 
-    // หา assignment ของ delivery นี้ (จะเลือกตัวที่กำลัง transporting เท่านั้น)
-    const assignSnap = await db
-      .collection(ASSIGN_COL)
+    // หา assignment ของ delivery นี้ (เอาอันที่กำลังขนส่งอยู่)
+    const assignSnap = await db.collection(ASSIGN_COL)
       .where("delivery_id", "==", Number(delivery_id))
       .get();
 
-    if (assignSnap.empty) return res.status(404).json({ error: "assignment for this delivery not found" });
+    if (assignSnap.empty) {
+      return res.status(404).json({ error: "assignment for this delivery not found" });
+    }
 
-    // พยายามเลือกตัวที่ status = transporting
-    const aDoc = assignSnap.docs.find(d => (d.data()?.status === "transporting"));
+    const aDoc = assignSnap.docs.find(d => d.data()?.status === "transporting");
     if (!aDoc) return res.status(400).json({ error: "No assignment in 'transporting' for this delivery" });
 
     const a = aDoc.data();
 
-    // (ออปชัน) ตรวจสิทธิ์ rider
+    // ตรวจสิทธิ์ rider (ถ้าส่งมา)
     if (rider_id != null && Number(rider_id) !== Number(a.rider_id)) {
       return res.status(403).json({ error: "rider_id does not match assignment" });
     }
 
-    // ตรวจว่ามี delivery จริง
+    // มี delivery จริงไหม
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(a.delivery_id));
     const deliveryDoc = await deliveryRef.get();
     if (!deliveryDoc.exists) return res.status(404).json({ error: "delivery not found" });
+    const d = deliveryDoc.data();
 
-    // อัปเดต assignment -> finish (แนบรูปถ้ามี)
-    const updates = {
+    // อัปเดต assignment -> finish และแนบรูปปลายทาง (status3)
+    const assignUpdates = {
       status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       ...(picture_status3 ? { picture_status3 } : {}),
     };
-    await aDoc.ref.update(updates);
+    await aDoc.ref.update(assignUpdates);
 
     // sync delivery.status -> finish
     await deliveryRef.update({
@@ -871,17 +911,47 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // อ่าน assignment ล่าสุดหลังอัปเดต เพื่อคืนค่ารูปครบ
+    const aLatest = (await aDoc.ref.get()).data() || {};
+
     return res.json({
       ok: true,
       message: `Status updated to ${status}`,
       delivery_id: a.delivery_id,
       assi_id: a.assi_id,
       rider_id: a.rider_id,
+
+      // รูปพิสูจน์
+      proof_images: {
+        picture_status2: aLatest.picture_status2 ?? null,   // ตอนรับของ/ขึ้นรถ
+        picture_status3: aLatest.picture_status3 ?? null,   // ตอนส่งสำเร็จ
+      },
+
+      // รายละเอียดสินค้าที่ส่ง (มาจากคอลเลกชัน delivery)
+      product: {
+        name_product: d?.name_product ?? null,
+        detail_product: d?.detail_product ?? null,
+        picture_product: d?.picture_product ?? null,
+        amount: d?.amount ?? null,
+        phone_receiver: d?.phone_receiver ?? null,
+      },
+
+      // ข้อมูลเสริมเผื่อใช้งานหน้าบ้าน
+      meta: {
+        status_delivery: status,
+        user_id_sender: d?.user_id_sender ?? null,
+        user_id_receiver: d?.user_id_receiver ?? null,
+        address_id_sender: d?.address_id_sender ?? null,
+        address_id_receiver: d?.address_id_receiver ?? null,
+        delivery_updatedAt: d?.updatedAt ?? null,
+        assignment_updatedAt: aLatest?.updatedAt ?? null,
+      },
     });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
+
 
 
 // GET /users/:userId/rider-car  -> หา rider_car ด้วย user_id
