@@ -1117,6 +1117,75 @@ app.get("/riders/history/:user_id?", async (req, res) => {
   }
 });
 
+app.get("/users/deliveries/:user_id?", async (req, res) => {
+  try {
+    // รองรับทั้ง path param และ query param
+    const user_id_raw = req.params.user_id ?? req.query.user_id;
+    if (!user_id_raw) return res.status(400).json({ error: "user_id is required" });
+
+    const user_id = String(user_id_raw);
+    const userIdNum = Number(user_id);
+    if (Number.isNaN(userIdNum)) return res.status(400).json({ error: "user_id must be a number" });
+
+    // 1) ตรวจ user + role
+    const uSnap = await db.collection(USER_COL).doc(user_id).get();
+    if (!uSnap.exists) return res.status(404).json({ error: "user not found" });
+
+    const role = (uSnap.data() || {}).role; // 0=user, 1=rider
+    // ถ้าต้องการอนุญาตเฉพาะ user ปกติ:
+    if (role !== 0) {
+      // เปลี่ยนเป็น 403 หากอยากบล็อกจริง ๆ
+      return res.json({ role, count: 0, items: [] });
+    }
+
+    // 2) ค้น delivery ที่ผู้ใช้คนนี้เป็นผู้ส่ง (user_id_sender == user_id)
+    let dSnap;
+    try {
+      dSnap = await db
+        .collection(DELIVERY_COL)
+        .where("user_id_sender", "==", userIdNum)
+        .orderBy("updatedAt", "desc")   // ต้องมี index ถ้าเออเรอร์จะ fallback ด้านล่าง
+        .limit(200)
+        .get();
+    } catch (err) {
+      console.warn("Composite index required for orderBy(updatedAt). Using fallback without orderBy.", err.message);
+      dSnap = await db
+        .collection(DELIVERY_COL)
+        .where("user_id_sender", "==", userIdNum)
+        .limit(200)
+        .get();
+    }
+
+    if (dSnap.empty) return res.json({ role, count: 0, items: [] });
+
+    // 3) จัดรูปร่างผลลัพธ์
+    const items = dSnap.docs.map(doc => {
+      const d = doc.data() || {};
+      return {
+        id: doc.id,
+        delivery_id: d.delivery_id ?? Number(doc.id),  // เผื่อใช้เลขภายใน
+        user_id_sender: d.user_id_sender ?? null,
+        user_id_receiver: d.user_id_receiver ?? null,
+        address_id_sender: d.address_id_sender ?? null,
+        address_id_receiver: d.address_id_receiver ?? null,
+        name_product: d.name_product ?? null,
+        detail_product: d.detail_product ?? null,
+        amount: d.amount ?? null,
+        picture_product: d.picture_product ?? null,
+        picture_status1: d.picture_status1 ?? null,
+        phone_receiver: d.phone_receiver ?? null,
+        status: d.status ?? null,          // waiting/finish/...
+        createdAt: d.createdAt ?? null,
+        updatedAt: d.updatedAt ?? null,
+      };
+    });
+
+    return res.json({ role, count: items.length, items });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
