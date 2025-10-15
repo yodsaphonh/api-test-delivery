@@ -1198,7 +1198,7 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
     // ดึงเฉพาะงานที่ยังอยู่ระหว่างส่ง (accept/transporting)
     const snap = await db.collection("delivery")
       .where("user_id_receiver", "==", userId)
-      .where("status", "in", ["accept", "transporting"])
+      .where("status", "in", ["accept"])
       .get();
 
     const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
