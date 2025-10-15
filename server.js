@@ -1302,7 +1302,7 @@ app.get("/deliveries/status-finish/:user_id", async (req, res) => {
 
 
 // GET /deliveries/sender-info/:delivery_id
-app.get("/deliveries/sender-info/:delivery_id", async (req, res) => {
+app.get("/deliveries/receiver-detail/:delivery_id", async (req, res) => {
   try {
     const deliveryId = String(req.params.delivery_id);
 
