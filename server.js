@@ -1187,8 +1187,34 @@ app.get("/users/deliveries/:user_id?", async (req, res) => {
   }
 });
 
-// GET /deliveries/by-receiver/:user_id?limit=20&cursor=<ISO8601>
+// GET /deliveries/by-receiver/:user_id
 app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
+  try {
+    const userId = Number(req.params.user_id);
+    if (!Number.isFinite(userId)) {
+      return res.status(400).json({ error: "user_id must be a number" });
+    }
+
+    const snap = await db.collection("delivery")
+      .where("user_id_receiver", "==", userId)
+      .get();
+
+    const items = [];
+    snap.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+
+    return res.json({
+      user_id_receiver: userId,
+      count: items.length,
+      items,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+
+app.get("/deliveries/status-transporting/:user_id", async (req, res) => {
   try {
     const userId = Number(req.params.user_id);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
@@ -1198,10 +1224,11 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
       return res.status(400).json({ error: "user_id must be a number" });
     }
 
-    // 1) page deliveries
+    // 1) page เฉพาะงานที่กำลังขนส่ง
     let q = db.collection("delivery")
       .where("user_id_receiver", "==", userId)
-      .orderBy("updatedAt", "desc")
+      .where("status", "==", "transporting")       // << เงื่อนไขใหม่
+      .orderBy("updatedAt", "desc")                // อาจต้องสร้าง composite index
       .limit(limit);
 
     if (cursorISO) q = q.startAfter(new Date(cursorISO));
@@ -1209,20 +1236,17 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
     const snap = await q.get();
     const deliveries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    // 2) enrich: attach delivery_assignment ของแต่ละ delivery_id
-    const LIMIT_ASSIGN_PER_DELIVERY = 50; // ปรับได้ตามต้องการ (เอาทั้งหมดเอา limit ออก)
+    // 2) แนบ assignment ของแต่ละ delivery
     const enriched = await Promise.all(deliveries.map(async (del) => {
       try {
         const assSnap = await db.collection("delivery_assignment")
-          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเก็บเป็นสตริง เอา Number ออก
+          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเป็นสตริงเอา Number ออก
           .orderBy("updatedAt", "desc")
-          .limit(LIMIT_ASSIGN_PER_DELIVERY)
           .get();
 
         const assignments = assSnap.docs.map(a => ({ id: a.id, ...a.data() }));
-        return { ...del, assignments }; // แนบเป็น Array
-      } catch (e) {
-        // ถ้าอ่าน assignment พัง ไม่ให้ล้มทั้งชุด
+        return { ...del, assignments };
+      } catch {
         return { ...del, assignments: [] };
       }
     }));
@@ -1242,6 +1266,9 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
+
+
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
