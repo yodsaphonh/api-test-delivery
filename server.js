@@ -1195,12 +1195,13 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
       return res.status(400).json({ error: "user_id must be a number" });
     }
 
+    // ดึงเฉพาะงานที่ยังอยู่ระหว่างส่ง (accept/transporting)
     const snap = await db.collection("delivery")
       .where("user_id_receiver", "==", userId)
+      .where("status", "in", ["accept", "transporting"])
       .get();
 
-    const items = [];
-    snap.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+    const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
     return res.json({
       user_id_receiver: userId,
@@ -1248,7 +1249,7 @@ app.get("/deliveries/status-transporting/:user_id", async (req, res) => {
     return res.json({
       user_id_receiver: userId,
       count: enriched.length,
-      items: enriched,   // ไม่มี nextCursor เพราะตัดการเรียง/แบ่งหน้าแบบ cursor ออก
+      items: enriched,
     });
   } catch (err) {
     console.error(err);
@@ -1256,8 +1257,48 @@ app.get("/deliveries/status-transporting/:user_id", async (req, res) => {
   }
 });
 
+app.get("/deliveries/status-finish/:user_id", async (req, res) => {
+  try {
+    const userId = Number(req.params.user_id);
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
 
+    if (!Number.isFinite(userId)) {
+      return res.status(400).json({ error: "user_id must be a number" });
+    }
 
+    // เอาเฉพาะงานที่กำลังขนส่ง และผู้ใช้เป็นผู้รับ
+    let q = db.collection("delivery")
+      .where("user_id_receiver", "==", userId)
+      .where("status", "==", "finish")
+      .limit(limit); // ไม่มี orderBy(updatedAt)
+
+    const snap = await q.get();
+    const deliveries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // แนบ assignment ของแต่ละงาน (ไม่ orderBy เช่นกัน)
+    const enriched = await Promise.all(deliveries.map(async (del) => {
+      try {
+        const assSnap = await db.collection("delivery_assignment")
+          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเก็บเป็น string เอา Number ออก
+          .get();
+
+        const assignments = assSnap.docs.map(a => ({ id: a.id, ...a.data() }));
+        return { ...del, assignments };
+      } catch {
+        return { ...del, assignments: [] };
+      }
+    }));
+
+    return res.json({
+      user_id_receiver: userId,
+      count: enriched.length,
+      items: enriched,   // ไม่มี nextCursor เพราะตัดการเรียง/แบ่งหน้าแบบ cursor ออก
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: String(err?.message || err) });
+  }
+});
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
