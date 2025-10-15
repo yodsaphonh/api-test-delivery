@@ -1213,35 +1213,29 @@ app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
   }
 });
 
-
 app.get("/deliveries/status-transporting/:user_id", async (req, res) => {
   try {
     const userId = Number(req.params.user_id);
     const limit = Math.min(Number(req.query.limit) || 20, 100);
-    const cursorISO = req.query.cursor;
 
     if (!Number.isFinite(userId)) {
       return res.status(400).json({ error: "user_id must be a number" });
     }
 
-    // 1) page เฉพาะงานที่กำลังขนส่ง
+    // เอาเฉพาะงานที่กำลังขนส่ง และผู้ใช้เป็นผู้รับ
     let q = db.collection("delivery")
       .where("user_id_receiver", "==", userId)
-      .where("status", "==", "transporting")       // << เงื่อนไขใหม่
-      .orderBy("updatedAt", "desc")                // อาจต้องสร้าง composite index
-      .limit(limit);
-
-    if (cursorISO) q = q.startAfter(new Date(cursorISO));
+      .where("status", "==", "transporting")
+      .limit(limit); // ไม่มี orderBy(updatedAt)
 
     const snap = await q.get();
     const deliveries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    // 2) แนบ assignment ของแต่ละ delivery
+    // แนบ assignment ของแต่ละงาน (ไม่ orderBy เช่นกัน)
     const enriched = await Promise.all(deliveries.map(async (del) => {
       try {
         const assSnap = await db.collection("delivery_assignment")
-          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเป็นสตริงเอา Number ออก
-          .orderBy("updatedAt", "desc")
+          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเก็บเป็น string เอา Number ออก
           .get();
 
         const assignments = assSnap.docs.map(a => ({ id: a.id, ...a.data() }));
@@ -1251,15 +1245,10 @@ app.get("/deliveries/status-transporting/:user_id", async (req, res) => {
       }
     }));
 
-    // 3) next cursor
-    const last = snap.docs[snap.docs.length - 1];
-    const nextCursor = last?.get("updatedAt")?.toDate?.()?.toISOString?.() || null;
-
     return res.json({
       user_id_receiver: userId,
       count: enriched.length,
-      nextCursor,
-      items: enriched,
+      items: enriched,   // ไม่มี nextCursor เพราะตัดการเรียง/แบ่งหน้าแบบ cursor ออก
     });
   } catch (err) {
     console.error(err);
