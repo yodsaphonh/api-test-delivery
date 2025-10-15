@@ -1301,48 +1301,57 @@ app.get("/deliveries/status-finish/:user_id", async (req, res) => {
 });
 
 
-app.get("/deliveries/detail-delivery-receiver/:delivery_id", async (req, res) => {
+// GET /deliveries/sender-info/:delivery_id
+app.get("/deliveries/sender-info/:delivery_id", async (req, res) => {
   try {
     const deliveryId = String(req.params.delivery_id);
 
-    // 1) หา delivery ก่อน
-    const dSnap = await db.collection(DELIVERY_COL).doc(deliveryId).get();
-    if (!dSnap.exists) {
-      return res.status(404).json({ error: "delivery not found" });
-    }
+    // 1) อ่าน delivery
+    const dSnap = await db.collection("delivery").doc(deliveryId).get();
+    if (!dSnap.exists) return res.status(404).json({ error: "delivery not found" });
     const d = dSnap.data() || {};
-    const user_id_sender = Number(d.user_id_sender);
-    const address_id_sender = Number(d.address_id_sender);
 
-    if (!Number.isFinite(user_id_sender) || !Number.isFinite(address_id_sender)) {
-      return res.status(400).json({ error: "delivery missing user_id_sender or address_id_sender" });
-    }
+    const user_id_sender     = Number(d.user_id_sender);
+    const address_id_sender  = Number(d.address_id_sender);
 
-    // 2) ดึงข้อมูลผู้ส่ง (user_id_sender)
-    const uSnap = await db.collection(USER_COL).doc(String(user_id_sender)).get();
+    // 2) ผู้ส่ง
+    const uSnap = await db.collection("user").doc(String(user_id_sender)).get();
     const u = uSnap.exists ? (uSnap.data() || {}) : {};
 
-    // 3) ดึงที่อยู่ผู้ส่ง (address_id_sender)
-    const aSnap = await db.collection(ADDRESS_COL).doc(String(address_id_sender)).get();
+    // 3) ที่อยู่ผู้ส่ง
+    const aSnap = await db.collection("user_address").doc(String(address_id_sender)).get();
     const a = aSnap.exists ? (aSnap.data() || {}) : {};
 
-    // 4) สร้างผลลัพธ์ (รีเนมให้เข้าใจง่ายตามที่ขอ)
+    // 4) รวมผลลัพธ์ (เพิ่มข้อมูลสินค้า)
     return res.json({
       delivery_id: Number(deliveryId),
+
+      // ---- สินค้า (ดึงจาก delivery เอง) ----
+      product: {
+        name_product: d.name_product ?? null,
+        detail_product: d.detail_product ?? null,
+        amount: d.amount ?? null,
+        picture_product: d.picture_product ?? null,   // base64/URL ตามที่เก็บ
+        status: d.status ?? null                      // เผื่อใช้แสดงสถานะ
+      },
+
+      // ---- ผู้ส่ง ----
       sender: {
         user_id_sender,
         name: u.username || u.name || null,
-        phone: u.phone || null,
+        phone: u.phone || null
       },
+
+      // ---- ที่อยู่ผู้ส่ง ----
       sender_address: {
         address_id_sender,
         address: a.address ?? null,
         lat: a.lat ?? null,
-        lng: a.lng ?? null,
-      },
+        lng: a.lng ?? null
+      }
     });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 //* ------------------------------- Start server ------------------------------- */
