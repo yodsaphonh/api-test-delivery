@@ -1187,6 +1187,60 @@ app.get("/users/deliveries/:user_id?", async (req, res) => {
   }
 });
 
+// ผู้รับดูพัสดุที่กำลังจะมาส่งให้ตนเอง
+// GET /receivers/incoming/5
+app.get("/receivers/incoming/:user_id", async (req, res) => {
+  try {
+    const userIdRaw = req.params.user_id;
+    const user_id = Number(userIdRaw);
+    if (!userIdRaw || Number.isNaN(user_id)) {
+      return res.status(400).json({ error: "user_id must be a number" });
+    }
+
+    // สถานะที่ยังอยู่ระหว่างส่ง (ปรับได้ตาม flow จริง)
+    const inProgressStatuses = ["accept", "transporting"];
+
+    // ดึง delivery ที่ผู้ใช้เป็นผู้รับ และยังอยู่ระหว่างส่ง
+    const qSnap = await db
+      .collection(DELIVERY_COL)
+      .where("user_id_receiver", "==", user_id)
+      .where("status", "in", inProgressStatuses)
+      .orderBy("updatedAt", "desc") // อาจต้องสร้าง composite index
+      .get();
+
+    const items = qSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // เติมข้อมูล assignment ล่าสุด (ออปชัน)
+    const enriched = await Promise.all(items.map(async (del) => {
+      try {
+        const aSnap = await db
+          .collection(ASSIGN_COL)
+          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเป็นสตริงให้เอา Number ออก
+          .where("status", "in", inProgressStatuses)
+          .orderBy("updatedAt", "desc")
+          .limit(1)
+          .get();
+
+        let assignment = null;
+        if (!aSnap.empty) {
+          const doc = aSnap.docs[0];
+          assignment = { id: doc.id, ...doc.data() };
+        }
+        return { ...del, assignment };
+      } catch (_) {
+        return { ...del, assignment: null };
+      }
+    }));
+
+    return res.json({
+      user_id,
+      count: enriched.length,
+      items: enriched,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
