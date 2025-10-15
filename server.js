@@ -1299,6 +1299,52 @@ app.get("/deliveries/status-finish/:user_id", async (req, res) => {
     return res.status(500).json({ error: String(err?.message || err) });
   }
 });
+
+
+app.get("/deliveries/detail-delivery-receiver/:delivery_id", async (req, res) => {
+  try {
+    const deliveryId = String(req.params.delivery_id);
+
+    // 1) หา delivery ก่อน
+    const dSnap = await db.collection(DELIVERY_COL).doc(deliveryId).get();
+    if (!dSnap.exists) {
+      return res.status(404).json({ error: "delivery not found" });
+    }
+    const d = dSnap.data() || {};
+    const user_id_sender = Number(d.user_id_sender);
+    const address_id_sender = Number(d.address_id_sender);
+
+    if (!Number.isFinite(user_id_sender) || !Number.isFinite(address_id_sender)) {
+      return res.status(400).json({ error: "delivery missing user_id_sender or address_id_sender" });
+    }
+
+    // 2) ดึงข้อมูลผู้ส่ง (user_id_sender)
+    const uSnap = await db.collection(USER_COL).doc(String(user_id_sender)).get();
+    const u = uSnap.exists ? (uSnap.data() || {}) : {};
+
+    // 3) ดึงที่อยู่ผู้ส่ง (address_id_sender)
+    const aSnap = await db.collection(ADDRESS_COL).doc(String(address_id_sender)).get();
+    const a = aSnap.exists ? (aSnap.data() || {}) : {};
+
+    // 4) สร้างผลลัพธ์ (รีเนมให้เข้าใจง่ายตามที่ขอ)
+    return res.json({
+      delivery_id: Number(deliveryId),
+      sender: {
+        user_id_sender,
+        name: u.username || u.name || null,
+        phone: u.phone || null,
+      },
+      sender_address: {
+        address_id_sender,
+        address: a.address ?? null,
+        lat: a.lat ?? null,
+        lng: a.lng ?? null,
+      },
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
