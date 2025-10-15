@@ -1187,25 +1187,55 @@ app.get("/users/deliveries/:user_id?", async (req, res) => {
   }
 });
 
-// GET /deliveries/by-receiver/:user_id
+// GET /deliveries/by-receiver/:user_id?limit=20&cursor=<ISO8601>
 app.get("/deliveries/by-receiver/:user_id", async (req, res) => {
   try {
     const userId = Number(req.params.user_id);
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const cursorISO = req.query.cursor;
+
     if (!Number.isFinite(userId)) {
       return res.status(400).json({ error: "user_id must be a number" });
     }
 
-    const snap = await db.collection("delivery")
+    // 1) page deliveries
+    let q = db.collection("delivery")
       .where("user_id_receiver", "==", userId)
-      .get();
+      .orderBy("updatedAt", "desc")
+      .limit(limit);
 
-    const items = [];
-    snap.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+    if (cursorISO) q = q.startAfter(new Date(cursorISO));
+
+    const snap = await q.get();
+    const deliveries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // 2) enrich: attach delivery_assignment ของแต่ละ delivery_id
+    const LIMIT_ASSIGN_PER_DELIVERY = 50; // ปรับได้ตามต้องการ (เอาทั้งหมดเอา limit ออก)
+    const enriched = await Promise.all(deliveries.map(async (del) => {
+      try {
+        const assSnap = await db.collection("delivery_assignment")
+          .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเก็บเป็นสตริง เอา Number ออก
+          .orderBy("updatedAt", "desc")
+          .limit(LIMIT_ASSIGN_PER_DELIVERY)
+          .get();
+
+        const assignments = assSnap.docs.map(a => ({ id: a.id, ...a.data() }));
+        return { ...del, assignments }; // แนบเป็น Array
+      } catch (e) {
+        // ถ้าอ่าน assignment พัง ไม่ให้ล้มทั้งชุด
+        return { ...del, assignments: [] };
+      }
+    }));
+
+    // 3) next cursor
+    const last = snap.docs[snap.docs.length - 1];
+    const nextCursor = last?.get("updatedAt")?.toDate?.()?.toISOString?.() || null;
 
     return res.json({
       user_id_receiver: userId,
-      count: items.length,
-      items,
+      count: enriched.length,
+      nextCursor,
+      items: enriched,
     });
   } catch (err) {
     console.error(err);
