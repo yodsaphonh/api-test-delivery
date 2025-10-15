@@ -973,6 +973,59 @@ app.get("/users/:userId/rider-car", async (req, res) => {
   }
 });
 
+// GET /delivery-assignments/by-delivery/:delivery_id
+// ตัวอย่าง: /delivery-assignments/by-delivery/1        -> ส่งรายการทั้งหมดของ delivery_id = 1
+app.get("/delivery-assignments/by-delivery/:delivery_id", async (req, res) => {
+  try {
+    const deliveryId = Number(req.params.delivery_id);
+    const latestOnly = String(req.query.latest || "") === "1";
+
+    if (!Number.isFinite(deliveryId)) {
+      return res.status(400).json({ error: "delivery_id ต้องเป็นตัวเลข" });
+    }
+
+    // ดึงเอกสารที่มี delivery_id ตรงกัน (ไม่ใส่ orderBy เพื่อเลี่ยง requirement index)
+    const snap = await db
+      .collection("delivery_assignment")
+      .where("delivery_id", "==", deliveryId)
+      .get();
+
+    if (snap.empty) {
+      return res.status(404).json({ error: "ไม่พบข้อมูล assignment ของ delivery นี้" });
+    }
+
+    // แปลง Timestamp -> ISO string และจัดเรียงใหม่ในโค้ด (updatedAt > createdAt)
+    const toISO = (ts) =>
+      ts && typeof ts.toDate === "function" ? ts.toDate().toISOString() : null;
+
+    const items = snap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          createdAt: toISO(data.createdAt),
+          updatedAt: toISO(data.updatedAt),
+        };
+      })
+      .sort((a, b) => {
+        const bu = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+        const au = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+        if (bu !== au) return bu - au;
+        const bc = b.createdAt ? Date.parse(b.createdAt) : 0;
+        const ac = a.createdAt ? Date.parse(a.createdAt) : 0;
+        return bc - ac;
+      });
+
+    if (latestOnly) {
+      return res.json(items[0]);
+    }
+    return res.json({ count: items.length, items });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
