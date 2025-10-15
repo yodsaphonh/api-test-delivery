@@ -1026,6 +1026,102 @@ app.get("/delivery-assignments/by-delivery/:delivery_id", async (req, res) => {
   }
 });
 
+
+app.get("/riders/history", async (req, res) => {
+  try {
+    const user_id = req.query.user_id;
+    if (!user_id) {
+      return res.status(400).json({ error: "user_id is required (use /riders/history?user_id=4)" });
+    }
+
+    // 1) ตรวจ user + role
+    const uSnap = await db.collection(USER_COL).doc(String(user_id)).get();
+    if (!uSnap.exists) return res.status(404).json({ error: "user not found" });
+
+    const role = (uSnap.data() || {}).role; // 0=user, 1=rider
+    if (role !== 1) {
+      // ผู้ใช้ทั่วไป -> คืนว่าง (ถ้าต้องการ block จริงให้เปลี่ยนเป็น 403)
+      return res.json({ role, count: 0, items: [] });
+    }
+
+    // 2) ดึง assignments ของ rider ที่ finish
+    const riderIdNum = Number(user_id);
+    const aSnap = await db
+      .collection(ASSI_COL)
+      .where("rider_id", "==", riderIdNum)
+      .where("status", "==", "finish")
+      .orderBy("updatedAt", "desc")
+      .limit(200)
+      .get();
+
+    if (aSnap.empty) {
+      return res.json({ role, count: 0, items: [] });
+    }
+
+    // 3) รวม delivery_id แบบ unique
+    const deliveryIds = Array.from(
+      new Set(
+        aSnap.docs
+          .map(d => (d.data() || {}).delivery_id)
+          .filter(v => v !== undefined && v !== null)
+          .map(v => String(v))
+      )
+    );
+
+    // 4) batch get delivery ทั้งหมดทีเดียว
+    const deliveryMap = new Map(); // key: delivery_id(string) -> data
+    if (deliveryIds.length > 0) {
+      const refs = deliveryIds.map(id => db.collection(DELIVERY_COL).doc(id));
+      const dSnaps = await db.getAll(...refs);
+      dSnaps.forEach(s => {
+        if (s.exists) deliveryMap.set(s.id, { id: s.id, ...s.data() });
+      });
+    }
+
+    // 5) ประกอบผลลัพธ์
+    const items = aSnap.docs.map(doc => {
+      const a = doc.data() || {};
+      const d = a.delivery_id != null ? deliveryMap.get(String(a.delivery_id)) || null : null;
+
+      return {
+        assi_id: a.assi_id ?? Number(doc.id),
+        id: doc.id,               // Firestore doc id (string)
+        rider_id: a.rider_id ?? null,
+        delivery_id: a.delivery_id ?? null,
+        status: a.status ?? null,
+        picture_status2: a.picture_status2 ?? null,
+        picture_status3: a.picture_status3 ?? null,
+        createdAt: a.createdAt ?? null,
+        updatedAt: a.updatedAt ?? null,
+
+        // แนบข้อมูลของ delivery_id นั้น ๆ จาก collection "delivery"
+        delivery: d
+          ? {
+              id: d.id,
+              user_id_sender: d.user_id_sender ?? null,
+              user_id_receiver: d.user_id_receiver ?? null,
+              address_id_sender: d.address_id_sender ?? null,
+              address_id_receiver: d.address_id_receiver ?? null,
+              name_product: d.name_product ?? null,
+              detail_product: d.detail_product ?? null,
+              amount: d.amount ?? null,
+              picture_product: d.picture_product ?? null,
+              picture_status1: d.picture_status1 ?? null,
+              phone_receiver: d.phone_receiver ?? null,
+              status: d.status ?? null,
+              updatedAt: d.updatedAt ?? null,
+            }
+          : null,
+      };
+    });
+
+    return res.json({ role, count: items.length, items });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
