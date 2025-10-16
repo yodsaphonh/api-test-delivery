@@ -477,21 +477,63 @@ body: { user_id_sender: 1 }
 ------------------------------------------------------------------ */
 app.post("/delivery/list-by-user", async (req, res) => {
   try {
-    const { user_id_sender } = req.body ?? {};
-    if (!user_id_sender) {
-      return res.status(400).json({ error: "user_id_sender is required" });
+    const userIdRaw = req.body?.user_id_sender ?? req.body?.user_id;
+    const user_id_sender = Number(userIdRaw);
+    if (!Number.isFinite(user_id_sender)) {
+      return res.status(400).json({ error: "user_id (or user_id_sender) must be a number" });
     }
 
+    // 1) ดึงงานที่ผู้ส่ง = user_id_sender
     const snap = await db
       .collection(DELIVERY_COL)
-      .where("user_id_sender", "==", Number(user_id_sender))
+      .where("user_id_sender", "==", user_id_sender)
       .get();
 
     const deliveries = snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => Number(a.delivery_id || 0) - Number(b.delivery_id || 0));
 
-    return res.json({ count: deliveries.length, deliveries });
+    // 2) แนบ assignments และสรุป proof (picture_status2/3) จาก assignment ล่าสุด
+    const enriched = await Promise.all(
+      deliveries.map(async (del) => {
+        try {
+          const assSnap = await db
+            .collection("delivery_assignment")
+            .where("delivery_id", "==", Number(del.delivery_id)) // ถ้าเก็บเป็นสตริง ให้ลบ Number()
+            .get();
+
+          const assignments = assSnap.docs.map(a => ({ id: a.id, ...a.data() }));
+
+          // หา "ล่าสุด" แบบไม่พึ่ง orderBy: ใช้ assi_id (auto-increment) ถ้ามี, ไม่งั้นลอง updatedAt
+          let latest = null;
+          if (assignments.length > 0) {
+            latest = [...assignments].sort((x, y) => {
+              const ax = Number(x.assi_id ?? 0), ay = Number(y.assi_id ?? 0);
+              if (ax !== ay) return ay - ax; // assi_id มาก = ใหม่กว่า
+              const ux = x.updatedAt?.seconds ?? 0, uy = y.updatedAt?.seconds ?? 0;
+              return uy - ux;
+            })[0];
+          }
+
+          return {
+            ...del,
+            assignments, // ทั้งชุด เผื่อไปใช้ต่อ
+            proof: {
+              picture_status2: latest?.picture_status2 ?? null,
+              picture_status3: latest?.picture_status3 ?? null,
+            },
+          };
+        } catch {
+          return { ...del, assignments: [], proof: { picture_status2: null, picture_status3: null } };
+        }
+      })
+    );
+
+    return res.json({
+      user_id_sender,
+      count: enriched.length,
+      deliveries: enriched,
+    });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: e.message });
