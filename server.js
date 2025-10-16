@@ -815,7 +815,7 @@ app.post("/rider/location/update", async (req, res) => {
       user_id: docId,                     // rider_id == user_id
       lat: Number(lat),
       lng: Number(lng),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
     await docRef.set(payload, { merge: true });
