@@ -645,8 +645,8 @@ app.post("/deliveries/accept", async (req, res) => {
           user_id: String(rider_id),
           lat: Number(rider_lat),
           lng: Number(rider_lng),
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          // createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
