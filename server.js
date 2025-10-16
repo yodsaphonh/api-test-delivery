@@ -908,13 +908,31 @@ app.get("/riders/overview/:riderId", async (req, res) => {
 
 // POST /deliveries/update-status-finish
 // body: { delivery_id, picture_status3?, rider_id? }
+// ปิดงานส่งของ (finish) — ใช้ rider_id = user_id ของผู้ใช้
 app.post("/deliveries/update-status-finish", async (req, res) => {
   try {
     const { delivery_id, picture_status3, rider_id } = req.body ?? {};
     const status = "finish";
-    if (!delivery_id) return res.status(400).json({ error: "delivery_id is required" });
 
-    // หา assignment ของ delivery นี้ (เอาอันที่กำลังขนส่งอยู่)
+    if (!delivery_id) {
+      return res.status(400).json({ error: "delivery_id is required" });
+    }
+
+    // --- ตรวจสิทธิ์: rider_id ใน body = user_id ของผู้ใช้ ---
+    // ต้องมี user (doc id = rider_id) และ user.role === 1 (เป็นไรเดอร์)
+    if (rider_id == null) {
+      return res.status(400).json({ error: "rider_id (user_id) is required" });
+    }
+    const riderUserDoc = await db.collection(USER_COL).doc(String(rider_id)).get();
+    if (!riderUserDoc.exists) {
+      return res.status(404).json({ error: "rider user not found" });
+    }
+    const riderUser = riderUserDoc.data() || {};
+    if (Number(riderUser.role) !== 1) {
+      return res.status(403).json({ error: "permission denied: user is not a rider" });
+    }
+
+    // --- หา assignment ของดีลิเวอรี่นี้ (กำลังขนส่งอยู่) ---
     const assignSnap = await db.collection(ASSIGN_COL)
       .where("delivery_id", "==", Number(delivery_id))
       .get();
@@ -924,22 +942,26 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
     }
 
     const aDoc = assignSnap.docs.find(d => d.data()?.status === "transporting");
-    if (!aDoc) return res.status(400).json({ error: "No assignment in 'transporting' for this delivery" });
+    if (!aDoc) {
+      return res.status(400).json({ error: "No assignment in 'transporting' for this delivery" });
+    }
 
     const a = aDoc.data();
 
-    // ตรวจสิทธิ์ rider (ถ้าส่งมา)
-    if (rider_id != null && Number(rider_id) !== Number(a.rider_id)) {
-      return res.status(403).json({ error: "rider_id does not match assignment" });
+    // --- ตรวจว่า rider ที่ยิงคำขอ = rider ที่ถือเคสอยู่ไหม (เราเก็บ rider_id = user_id ของไรเดอร์) ---
+    if (Number(rider_id) !== Number(a.rider_id)) {
+      return res.status(403).json({ error: "rider_id does not match assignment holder" });
     }
 
-    // มี delivery จริงไหม
+    // --- มี delivery จริงไหม ---
     const deliveryRef = db.collection(DELIVERY_COL).doc(String(a.delivery_id));
     const deliveryDoc = await deliveryRef.get();
-    if (!deliveryDoc.exists) return res.status(404).json({ error: "delivery not found" });
+    if (!deliveryDoc.exists) {
+      return res.status(404).json({ error: "delivery not found" });
+    }
     const d = deliveryDoc.data();
 
-    // อัปเดต assignment -> finish และแนบรูปปลายทาง (status3)
+    // --- อัปเดต assignment -> finish + แนบรูปปลายทาง (status3) ---
     const assignUpdates = {
       status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -947,13 +969,13 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
     };
     await aDoc.ref.update(assignUpdates);
 
-    // sync delivery.status -> finish
+    // --- sync delivery.status -> finish ---
     await deliveryRef.update({
       status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // อ่าน assignment ล่าสุดหลังอัปเดต เพื่อคืนค่ารูปครบ
+    // --- อ่าน assignment ล่าสุดหลังอัปเดต เพื่อคืนค่ารูปครบ ---
     const aLatest = (await aDoc.ref.get()).data() || {};
 
     return res.json({
@@ -961,15 +983,16 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
       message: `Status updated to ${status}`,
       delivery_id: a.delivery_id,
       assi_id: a.assi_id,
-      rider_id: a.rider_id,
+      rider_id: a.rider_id,         // = user_id ของไรเดอร์
+      rider_user_role: riderUser.role, // เผื่อ debug
 
       // รูปพิสูจน์
       proof_images: {
-        picture_status2: aLatest.picture_status2 ?? null,   // ตอนรับของ/ขึ้นรถ
-        picture_status3: aLatest.picture_status3 ?? null,   // ตอนส่งสำเร็จ
+        picture_status2: aLatest.picture_status2 ?? null, // ตอนรับของ/ขึ้นรถ
+        picture_status3: aLatest.picture_status3 ?? null, // ตอนส่งสำเร็จ
       },
 
-      // รายละเอียดสินค้าที่ส่ง (มาจากคอลเลกชัน delivery)
+      // รายละเอียดสินค้า (จาก collection delivery)
       product: {
         name_product: d?.name_product ?? null,
         detail_product: d?.detail_product ?? null,
@@ -978,7 +1001,7 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
         phone_receiver: d?.phone_receiver ?? null,
       },
 
-      // ข้อมูลเสริมเผื่อใช้งานหน้าบ้าน
+      // ข้อมูลเสริม
       meta: {
         status_delivery: status,
         user_id_sender: d?.user_id_sender ?? null,
@@ -993,6 +1016,7 @@ app.post("/deliveries/update-status-finish", async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
+
 
 
 
