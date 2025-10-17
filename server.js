@@ -841,34 +841,53 @@ app.get("/riders/overview/:riderId", async (req, res) => {
     const rider_lat = loc.lat == null ? null : Number(loc.lat);
     const rider_lng = loc.lng == null ? null : Number(loc.lng);
 
-    // 2) หา assignment ล่าสุดของไรเดอร์ (เลี่ยง orderBy เพื่อไม่ต้องใช้ index)
+    // 2) ดึง assignment ของไรเดอร์ทั้งหมด (ไม่ใช้ orderBy เพื่อเลี่ยง index)
     const aSnap = await db.collection(ASSIGN_COL)
       .where("rider_id", "==", riderIdNum)
       .get();
 
-    // กรองให้เหลือเฉพาะสถานะที่ยังทำงานอยู่ แล้วเลือกอัน "ใหม่สุด" ตาม assi_id
-    let latest = null;
+    // เลือกงานที่ยังทำอยู่ (accept/transporting) ใหม่สุดตาม assi_id
+    let latestActive = null;
     aSnap.forEach(d => {
       const a = d.data();
-      if (["accept", "transporting"].includes(String(a.status))) {
-        if (!latest || Number(a.assi_id || 0) > Number(latest.assi_id || 0)) {
-          latest = a;
+      const st = String(a.status || "");
+      if (st === "accept" || st === "transporting") {
+        if (!latestActive || Number(a.assi_id || 0) > Number(latestActive.assi_id || 0)) {
+          latestActive = a;
         }
       }
     });
 
-    if (!latest) {
-      // ไม่มีงานค้าง ส่งพิกัดไรเดอร์ แต่ delivery/receiver เป็น null
+    if (!latestActive) {
+      // ไม่มีงานค้าง → ส่งเฉพาะพิกัดไรเดอร์ และรูป = null
       return res.json({
         rider_lat, rider_lng,
         receiver_lat: null, receiver_lng: null,
         delivery_id: null,
         updatedAt: loc.updatedAt || null,
+        picture_status2: null,
+        picture_status3: null,
       });
     }
 
-    // 3) อ่าน delivery เพื่อเอา address_id_receiver
-    const deliveryId = Number(latest.delivery_id);
+    // 3) หา delivery_id จากงานค้าง
+    const deliveryId = Number(latestActive.delivery_id);
+
+    // 3.1 เพื่อให้ได้รูปที่ "ใหม่สุด" แม้สถานะจะ finish แล้ว
+    //     เราหาเอกสาร assignment ที่มี delivery_id เดียวกันของไรเดอร์นี้ แล้วเลือก assi_id มากสุด
+    let latestForPictures = latestActive;
+    aSnap.forEach(d => {
+      const a = d.data();
+      if (Number(a.delivery_id) === deliveryId) {
+        if (!latestForPictures || Number(a.assi_id || 0) > Number(latestForPictures.assi_id || 0)) {
+          latestForPictures = a;
+        }
+      }
+    });
+    const picture_status2 = latestForPictures?.picture_status2 || null;
+    const picture_status3 = latestForPictures?.picture_status3 || null;
+
+    // 4) อ่าน delivery เพื่อเอา address_id_receiver
     const dSnap = await db.collection(DELIVERY_COL).doc(String(deliveryId)).get();
     if (!dSnap.exists) {
       return res.json({
@@ -876,13 +895,15 @@ app.get("/riders/overview/:riderId", async (req, res) => {
         receiver_lat: null, receiver_lng: null,
         delivery_id: deliveryId,
         updatedAt: loc.updatedAt || null,
+        picture_status2,
+        picture_status3,
       });
     }
 
     const d = dSnap.data();
     const addrRecvId = d.address_id_receiver != null ? String(d.address_id_receiver) : null;
 
-    // 4) อ่านพิกัดผู้รับจาก user_address
+    // 5) อ่านพิกัดผู้รับจาก user_address
     let receiver_lat = null, receiver_lng = null;
     if (addrRecvId) {
       const addrSnap = await db.collection(ADDR_COL).doc(addrRecvId).get();
@@ -893,17 +914,21 @@ app.get("/riders/overview/:riderId", async (req, res) => {
       }
     }
 
+    // 6) ตอบกลับรวมรูปด้วย
     return res.json({
       rider_lat, rider_lng,
       receiver_lat, receiver_lng,
       delivery_id: deliveryId,
       updatedAt: loc.updatedAt || null,
+      picture_status2,
+      picture_status3,
     });
 
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
+
 
 
 // POST /deliveries/update-status-finish
