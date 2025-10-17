@@ -627,8 +627,8 @@ app.post("/deliveries/accept", async (req, res) => {
         status: "accept",
         picture_status2: null,
         picture_status3: null,
-        // createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       // อัปเดต delivery -> accept
@@ -645,8 +645,8 @@ app.post("/deliveries/accept", async (req, res) => {
           user_id: String(rider_id),
           lat: Number(rider_lat),
           lng: Number(rider_lng),
-          // createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -725,12 +725,12 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
       tx.update(aDoc.ref, {
         status: "transporting",
         picture_status2: finalPic2,
-        // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       tx.update(deliveryRef, {
         status: "transporting",
-        // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       tx.set(
@@ -739,8 +739,8 @@ app.post("/deliveries/update-status-accept", async (req, res) => {
           rider_location_id: String(rider_id),
           user_id: String(rider_id),
           lat: Number(rider_lat),
-          lng: Number(rider_lng), 
-          // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          lng: Number(rider_lng),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -815,7 +815,7 @@ app.post("/rider/location/update", async (req, res) => {
       user_id: docId,                     // rider_id == user_id
       lat: Number(lat),
       lng: Number(lng),
-      // updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
     await docRef.set(payload, { merge: true });
