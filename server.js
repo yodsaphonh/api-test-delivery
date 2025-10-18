@@ -1420,6 +1420,100 @@ app.get("/deliveries/receiver-detail/:delivery_id", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// GET /sender/history/:userId
+// ดึงประวัติการส่งของผู้ส่ง (user_id == user_id_sender) ที่ status = "finish"
+// พร้อมแนบ picture_status2/3 จาก delivery_assignment (เอกสาร assi_id ล่าสุดของ delivery นั้น)
+app.get("/sender/history/:userId", async (req, res) => {
+  try {
+    const userIdStr = String(req.params.userId || "");
+    if (!userIdStr.trim()) return res.status(400).json({ error: "userId is required" });
+    const userIdNum = Number(userIdStr);
+
+    // 1) ดึงรายการ delivery ของผู้ส่งคนนี้ที่ finish
+    let snap;
+    let filteredInMemory = false;
+    try {
+      // เร็วที่สุด (ต้องมี composite index: user_id_sender ==, status ==)
+      snap = await db.collection(DELIVERY_COL)
+        .where("user_id_sender", "==", userIdNum)
+        .where("status", "==", "finish")
+        .get();
+    } catch (err) {
+      // ถ้าไม่มี index ให้ fallback แล้วกรองในโค้ด
+      if (String(err.message || "").includes("FAILED_PRECONDITION")) {
+        filteredInMemory = true;
+        snap = await db.collection(DELIVERY_COL)
+          .where("user_id_sender", "==", userIdNum)
+          .get();
+      } else {
+        throw err;
+      }
+    }
+
+    let deliveries = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (filteredInMemory) {
+      deliveries = deliveries.filter(d => String(d.status || "").toLowerCase() === "finish");
+    }
+
+    // 2) สำหรับแต่ละ delivery ไปหา assignment ล่าสุด (assi_id มากสุด) เพื่อดึงรูป
+    const items = await Promise.all(
+      deliveries.map(async (d) => {
+        const delivIdNum = Number(d.delivery_id);
+
+        // query แบบเลี่ยง orderBy: ดึงทั้งหมดของ delivery_id นี้ แล้วคัดเลือก assi_id มากสุดในโค้ด
+        const aSnap = await db.collection(ASSIGN_COL)
+          .where("delivery_id", "==", delivIdNum)
+          .get();
+
+        let latestAssi = null;
+        aSnap.forEach(doc => {
+          const a = doc.data();
+          if (!latestAssi || Number(a.assi_id || 0) > Number(latestAssi.assi_id || 0)) {
+            latestAssi = a;
+          }
+        });
+
+        return {
+          // ฟิลด์จาก delivery
+          doc_id: d.id,
+          delivery_id: delivIdNum,
+          status: d.status || null,
+          amount: d.amount ?? null,
+          address_id_sender: d.address_id_sender ?? null,
+          address_id_receiver: d.address_id_receiver ?? null,
+          user_id_sender: d.user_id_sender ?? null,
+          user_id_receiver: d.user_id_receiver ?? null,
+          updatedAt: d.updatedAt || null,
+          // ฟิลด์จาก assignment ล่าสุด (ถ้ามี)
+          assi_id: latestAssi?.assi_id ?? null,
+          rider_id: latestAssi?.rider_id ?? null,
+          picture_status2: latestAssi?.picture_status2 ?? null,
+          picture_status3: latestAssi?.picture_status3 ?? null,
+          assignment_status: latestAssi?.status ?? null,
+          assignment_updatedAt: latestAssi?.updatedAt ?? null,
+        };
+      })
+    );
+
+    // 3) เรียงล่าสุดก่อน (updatedAt จาก delivery → สำรองด้วย assi_id)
+    items.sort((a, b) => {
+      const ta = a.updatedAt?.toMillis ? a.updatedAt.toMillis() : Number(a.assi_id || 0);
+      const tb = b.updatedAt?.toMillis ? b.updatedAt.toMillis() : Number(b.assi_id || 0);
+      return tb - ta;
+    });
+
+    return res.json({
+      user_id_sender: userIdNum,
+      count: items.length,
+      items,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 //* ------------------------------- Start server ------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
